@@ -1624,10 +1624,8 @@ void setup() {
     pinMode(ENC_A,INPUT_PULLUP); pinMode(ENC_B,INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(ENC_A),enc_isr,CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_B),enc_isr,CHANGE);
-    // GPIO0 tiene pull-down externo en el PCB → normalmente LOW.
-    // El botón conecta a VCC → activo HIGH → detectar RISING.
-    pinMode(ENC_SW, INPUT); // sin PULLUP interno; hay pull-down externo
-    attachInterrupt(digitalPinToInterrupt(ENC_SW), enc_sw_isr, RISING);
+    // ENC_SW (GPIO0) se adjunta al FINAL de setup(), después de que
+    // el pin de strapping haya dejado de rebotar.
 
     display->begin();
     lv_init();
@@ -1703,6 +1701,13 @@ void setup() {
     last_touch_ms=millis();
     fetch_weather();
     fetch_tuya_temp();
+
+    // GPIO0 ya estable (strapping leído mucho antes). Adjuntar aquí
+    // evita los miles de ISR falsos del rebote durante el arranque.
+    pinMode(ENC_SW, INPUT_PULLUP);
+    noInterrupts(); enc_btn_pending=false; enc_sw_isr_count=0; interrupts();
+    attachInterrupt(digitalPinToInterrupt(ENC_SW), enc_sw_isr, FALLING);
+    Serial.printf("[ENC_SW] interrupt adjuntado. GPIO0=%d\n", digitalRead(ENC_SW));
 }
 
 // ── LOOP ──────────────────────────────────────────────────────
@@ -1775,33 +1780,14 @@ void loop() {
         }
     }
 
-    // ── DEBUG: buscar botón encoder en PCF8574 (I2C 0x21) ────────
-    // El PCF8574 tiene 8 bits; 3=LCD_POWER 4=LCD_RESET, resto libres.
-    // Pulsa el botón repetidamente y mira qué bit cambia.
+    // ── DEBUG ENC_SW (quitar cuando funcione) ────────────────────
     {
-        static uint8_t       last_pcf  = 0xFF;
-        static unsigned long pcf_ts    = 0;
-        static bool          pcf_ready = false;
-        if(millis()-pcf_ts >= 50){ // poll cada 50ms
-            pcf_ts = millis();
-            Wire.requestFrom((uint8_t)0x21, (uint8_t)1);
-            if(Wire.available()){
-                uint8_t v = Wire.read();
-                if(!pcf_ready){ last_pcf=v; pcf_ready=true;
-                    Serial.printf("[PCF] estado inicial: 0x%02X  bits: ", v);
-                    for(int b=7;b>=0;b--) Serial.print((v>>b)&1);
-                    Serial.println();
-                }
-                if(v != last_pcf){
-                    Serial.printf("[PCF] CAMBIO 0x%02X->0x%02X  bits: ", last_pcf, v);
-                    for(int b=7;b>=0;b--) Serial.print((v>>b)&1);
-                    uint8_t diff=v^last_pcf;
-                    for(int b=0;b<8;b++) if((diff>>b)&1)
-                        Serial.printf("  <<< BIT%d %s", b, (v>>b)&1?"1(alto)":"0(bajo)");
-                    Serial.println("  <<< CANDIDATO!");
-                    last_pcf=v;
-                }
-            }
+        static uint32_t last_cnt = 0;
+        uint32_t cnt; noInterrupts(); cnt=enc_sw_isr_count; interrupts();
+        if(cnt != last_cnt){
+            Serial.printf("[ISR] ENC_SW disparo  GPIO0=%d  total=%lu  ms=%lu\n",
+                digitalRead(ENC_SW), cnt, millis());
+            last_cnt=cnt;
         }
     }
     // ─────────────────────────────────────────────────────────────
