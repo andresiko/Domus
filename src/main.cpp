@@ -1624,8 +1624,10 @@ void setup() {
     pinMode(ENC_A,INPUT_PULLUP); pinMode(ENC_B,INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(ENC_A),enc_isr,CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_B),enc_isr,CHANGE);
-    // GPIO0 es strapping pin (permanentemente LOW) — no es el botón.
-    // Candidatos para ENC_SW: 33,34,35,36,37 — el scanner en loop() identifica cuál es.
+    // GPIO0 tiene pull-down externo en el PCB → normalmente LOW.
+    // El botón conecta a VCC → activo HIGH → detectar RISING.
+    pinMode(ENC_SW, INPUT); // sin PULLUP interno; hay pull-down externo
+    attachInterrupt(digitalPinToInterrupt(ENC_SW), enc_sw_isr, RISING);
 
     display->begin();
     lv_init();
@@ -1773,33 +1775,24 @@ void loop() {
         }
     }
 
-    // ── SCANNER: buscar el pin del botón encoder ─────────────────
-    // Pulsa el botón repetidamente y mira qué GPIO cambia en el monitor.
+    // ── DEBUG GPIO0 (ENC_SW) ─────────────────────────────────────
     {
-        static const uint8_t CAND[] = {33,34,35,36,37,43,44};
-        static int prev_cand[7];
-        static bool cand_init = false;
-        static unsigned long scan_print_ts = 0;
-        if(!cand_init){
-            for(int i=0;i<7;i++){
-                pinMode(CAND[i], INPUT_PULLUP);
-                prev_cand[i] = digitalRead(CAND[i]);
-            }
-            cand_init = true;
+        static int           last_raw     = -1;
+        static uint32_t      last_isr_cnt = 0;
+        static unsigned long dbg_ts       = 0;
+        int raw = digitalRead(ENC_SW);
+        uint32_t cnt; noInterrupts(); cnt=enc_sw_isr_count; interrupts();
+        if(raw != last_raw){
+            Serial.printf("[SW] GPIO0 raw=%d  millis=%lu\n", raw, millis());
+            last_raw = raw;
         }
-        for(int i=0;i<7;i++){
-            int v = digitalRead(CAND[i]);
-            if(v != prev_cand[i]){
-                Serial.printf("[SCAN] GPIO%u: %d -> %d  millis=%lu  <<< CANDIDATO SW!\n",
-                    CAND[i], prev_cand[i], v, millis());
-                prev_cand[i] = v;
-            }
+        if(cnt != last_isr_cnt){
+            Serial.printf("[ISR] disparo #%lu  GPIO0=%d  millis=%lu\n", cnt, raw, millis());
+            last_isr_cnt = cnt;
         }
-        if(millis()-scan_print_ts >= 3000){
-            scan_print_ts = millis();
-            Serial.print("[SCAN] estado: ");
-            for(int i=0;i<7;i++) Serial.printf("G%u=%d ", CAND[i], prev_cand[i]);
-            Serial.println();
+        if(millis()-dbg_ts >= 3000){
+            dbg_ts=millis();
+            Serial.printf("[SW] GPIO0=%d  ISR_total=%lu\n", raw, cnt);
         }
     }
     // ─────────────────────────────────────────────────────────────
