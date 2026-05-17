@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v1.5 - historial + encoder SW PCF8574"
+#define FW_VERSION "v1.6 - graph temperatura"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -190,7 +190,7 @@ static void lvgl_flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px) {
 }
 
 // ── Navegación (enum y estado antes de touch_read_cb) ────────
-enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN };
+enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN, SCR_GRAPH };
 static Screen cur_scr=SCR_TV, pend_scr=SCR_TV;
 static bool   scr_change=false;
 
@@ -266,6 +266,13 @@ static lv_obj_t *lbl_settings_ip=nullptr, *lbl_cfg_brightness=nullptr, *lbl_cfg_
 static lv_obj_t *lbl_broker_status=nullptr, *lbl_cfg_anim=nullptr;
 // Overlays
 static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_dial=nullptr, *scr_change_pin=nullptr;
+
+// Graph
+static lv_obj_t           *scr_graph       = nullptr;
+static lv_obj_t           *chart_temp      = nullptr;
+static lv_chart_series_t  *ser_int_g       = nullptr;
+static lv_obj_t           *btn_graph_range[4] = {};
+static uint8_t             graph_range_idx = 1; // 0=6H,1=24H,2=3D,3=7D
 static lv_obj_t *lbl_chpin_title=nullptr, *lbl_chpin_dots=nullptr, *lbl_chpin_msg=nullptr;
 static char chpin_buf[5]={};
 static int  chpin_len=0, chpin_phase=0;
@@ -428,6 +435,9 @@ static void hist_init() {
         if (f && f.size() == sizeof(heatmap))
             f.read((uint8_t*)heatmap, sizeof(heatmap));
         if (f) f.close();
+    } else {
+        File f = LittleFS.open("/heatmap.bin", "w");
+        if (f) { f.write((uint8_t*)heatmap, sizeof(heatmap)); f.close(); }
     }
     Serial.printf("[HIST] init  th=%lu  eh=%lu\n", hist_th, hist_eh);
 }
@@ -437,6 +447,7 @@ static void hist_init() {
 // Forward declarations for focus system (defined after build_* functions)
 static void focus_exit();
 static void sync_tile_cycle_idx();
+static void cb_open_graph(lv_event_t *e);
 
 // ── Navegación de tiles ──────────────────────────────────────
 // Layout: alarm(1,0) sensors(0,1) home(1,1) relays(2,1) settings(1,2)
@@ -1060,6 +1071,109 @@ static void build_scr_change_pin() {
     }
 }
 
+// ── GRAPH TEMPERATURA ────────────────────────────────────────
+static const uint32_t GRAPH_RANGE_S[] = {72, 288, 864, 2016}; // 6H,24H,3D,7D (muestras a 5min)
+static const char    *GRAPH_RANGE_LBL[] = {"6H","24H","3D","7D"};
+
+static void graph_update_range_btns() {
+    for(int i = 0; i < 4; i++) {
+        if(!btn_graph_range[i]) continue;
+        lv_obj_set_style_bg_color(btn_graph_range[i],
+            lv_color_hex(i == graph_range_idx ? COL_RELAY_ON : COL_CARD), 0);
+    }
+}
+
+static void graph_load() {
+    if(!chart_temp || !ser_int_g) return;
+    uint32_t total = GRAPH_RANGE_S[graph_range_idx];
+    uint32_t avail = (hist_th < MAX_TEMP) ? hist_th : MAX_TEMP;
+    uint32_t n     = (total < avail) ? total : avail;
+    uint16_t pts   = (uint16_t)((n < 120) ? n : 120);
+    if(pts < 2) pts = 2;
+    lv_chart_set_point_count(chart_temp, pts);
+    int32_t *ydata = lv_chart_get_y_array(chart_temp, ser_int_g);
+    if(!ydata){ lv_chart_refresh(chart_temp); return; }
+    for(uint16_t i = 0; i < pts; i++) ydata[i] = LV_CHART_POINT_NONE;
+    if(n == 0){ lv_chart_refresh(chart_temp); return; }
+    File f = LittleFS.open("/temp.bin", "r");
+    if(!f){ lv_chart_refresh(chart_temp); return; }
+    uint32_t start = hist_th - n;
+    uint32_t step  = n / pts; if(step < 1) step = 1;
+    TmpRec rec;
+    for(uint16_t i = 0; i < pts; i++){
+        uint32_t idx = start + (uint32_t)i * step;
+        f.seek(idx * sizeof(TmpRec));
+        if(f.read((uint8_t*)&rec, sizeof(rec)) == sizeof(rec) && rec.t_int != INT16_MIN)
+            ydata[i] = (int32_t)(rec.t_int / 10);
+    }
+    f.close();
+    lv_chart_refresh(chart_temp);
+}
+
+static void cb_graph_range(lv_event_t *e) {
+    graph_range_idx = (uint8_t)(intptr_t)lv_event_get_user_data(e);
+    graph_update_range_btns();
+    graph_load();
+}
+
+static void cb_open_graph(lv_event_t *e) {
+    graph_load();
+    graph_update_range_btns();
+    go_to(SCR_GRAPH);
+}
+
+static void build_scr_graph() {
+    scr_graph = lv_obj_create(nullptr);
+    bg(scr_graph);
+    centered_label(scr_graph, "TEMPERATURA", &lv_font_montserrat_20, COL_TEXT, -195);
+
+    // Botones de rango: 4 × 78px con gap 6px
+    const int BW = 78, BH = 34, GAP = 6;
+    // offsets X desde centro: -126, -42, +42, +126
+    const int XOFF[] = {-126, -42, 42, 126};
+    for(int i = 0; i < 4; i++){
+        lv_obj_t *b = lv_obj_create(scr_graph);
+        lv_obj_set_size(b, BW, BH);
+        lv_obj_align(b, LV_ALIGN_CENTER, XOFF[i], -155);
+        lv_obj_set_style_bg_color(b, lv_color_hex(i == graph_range_idx ? COL_RELAY_ON : COL_CARD), 0);
+        lv_obj_set_style_radius(b, BH / 2, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b, cb_graph_range, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, GRAPH_RANGE_LBL[i]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
+        lv_obj_center(l);
+        btn_graph_range[i] = b;
+    }
+
+    // Gráfica
+    chart_temp = lv_chart_create(scr_graph);
+    lv_obj_set_size(chart_temp, 360, 220);
+    lv_obj_align(chart_temp, LV_ALIGN_CENTER, 0, +5);
+    lv_chart_set_type(chart_temp, LV_CHART_TYPE_LINE);
+    lv_obj_set_style_bg_color(chart_temp, lv_color_hex(0x101018), 0);
+    lv_obj_set_style_bg_opa(chart_temp, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(chart_temp, lv_color_hex(COL_MUTED), 0);
+    lv_obj_set_style_border_width(chart_temp, 1, 0);
+    lv_obj_set_style_pad_all(chart_temp, 4, LV_PART_MAIN);
+    lv_obj_clear_flag(chart_temp, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(chart_temp, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_line_color(chart_temp, lv_color_hex(0x202030), LV_PART_MAIN);
+    lv_chart_set_range(chart_temp, LV_CHART_AXIS_PRIMARY_Y, 10, 35);
+    lv_chart_set_div_line_count(chart_temp, 5, 5);
+    ser_int_g = lv_chart_add_series(chart_temp, lv_color_hex(COL_TEXT), LV_CHART_AXIS_PRIMARY_Y);
+    lv_obj_set_style_size(chart_temp, 0, 0, LV_PART_INDICATOR); // sin puntos
+    lv_chart_set_point_count(chart_temp, 120);
+    lv_chart_set_all_value(chart_temp, ser_int_g, LV_CHART_POINT_NONE);
+
+    centered_label(scr_graph, "Girar: rango  |  Pulsar: salir",
+                   &lv_font_montserrat_14, COL_MUTED, +155);
+}
+
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
 static void cb_open_brightness(lv_event_t *e){ open_dial(DIAL_BRIGHTNESS); }
 static void cb_open_dim(lv_event_t *e)       { open_dial(DIAL_DIM); }
@@ -1106,7 +1220,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_CARD,+146,260,46,nullptr,nullptr);
+    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_CARD,+146,260,46,cb_open_graph,nullptr);
 
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
@@ -1452,6 +1566,9 @@ static void do_switch(Screen s) {
             if(lbl_chpin_msg)  lv_label_set_text(lbl_chpin_msg,"");
             lv_scr_load_anim(scr_change_pin,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_CHANGE_PIN; return;
+        case SCR_GRAPH:
+            lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            cur_scr=SCR_GRAPH; return;
     }
 }
 
@@ -1587,6 +1704,7 @@ static void exec_focus_item() {
     else if(w==btn_settings_dim)  cb_open_dim(nullptr);
     else if(w==btn_settings_pin)  cb_open_change_pin(nullptr);
     else if(w==btn_settings_anim) cb_cycle_anim(nullptr);
+    else if(w==btn_settings_hist) cb_open_graph(nullptr);
     else if(w==btn_arm)           cb_go_pin(nullptr);
     else if(w==lbl_alarm_badge)   cb_alarm_badge(nullptr);
     else if(w==lbl_sistema)       cb_settings_icon(nullptr);
@@ -1670,6 +1788,7 @@ void setup() {
     build_scr_change_pin();
     build_scr_arming();
     build_scr_dial();
+    build_scr_graph();
 
     lv_tileview_set_tile(tv,tile_home,LV_ANIM_OFF);
     lv_scr_load(tv);
@@ -1744,6 +1863,13 @@ void loop() {
                 lv_arc_set_value(dial_arc,dial_val);
                 update_dial_display();
             }
+        } else if(cur_scr==SCR_GRAPH){
+            enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
+            if(steps!=0){
+                graph_range_idx=(uint8_t)((graph_range_idx+steps%4+4)%4);
+                graph_update_range_btns();
+                graph_load();
+            }
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
@@ -1789,6 +1915,8 @@ void loop() {
                     if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
                     if(dial_mode!=DIAL_NONE){
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
+                    } else if(cur_scr==SCR_GRAPH){
+                        go_to(SCR_TV);
                     } else if(cur_scr==SCR_TV){
                         if(enc_mode==ENC_IDLE) focus_enter();
                         else exec_focus_item();
