@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v1.5 - historial LittleFS"
+#define FW_VERSION "v1.5 - historial + encoder SW PCF8574"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -69,9 +69,7 @@ static bool          screen_dimmed = false;
 // ── Encoder ──────────────────────────────────────────────────
 static volatile int  enc_delta       = 0;
 static int           enc_accum       = 0;
-static volatile bool     enc_btn_pending  = false;
-static volatile uint32_t enc_sw_isr_count = 0;   // debug: cuántas veces disparó la ISR
-static unsigned long     enc_btn_last_ms  = 0;
+static unsigned long enc_btn_last_ms = 0;
 
 void IRAM_ATTR enc_isr() {
     static uint8_t old_AB = 3;
@@ -79,7 +77,6 @@ void IRAM_ATTR enc_isr() {
     old_AB = ((old_AB << 2) | (digitalRead(ENC_A) << 1) | digitalRead(ENC_B)) & 0x0F;
     enc_delta -= enc_states[old_AB];
 }
-void IRAM_ATTR enc_sw_isr() { enc_btn_pending = true; enc_sw_isr_count++; }
 
 // ── Alarma ───────────────────────────────────────────────────
 enum AlarmState { AS_OFF, AS_ARMING, AS_ARMED, AS_GRACE, AS_SOUNDING };
@@ -1702,12 +1699,8 @@ void setup() {
     fetch_weather();
     fetch_tuya_temp();
 
-    // GPIO0 ya estable (strapping leído mucho antes). Adjuntar aquí
-    // evita los miles de ISR falsos del rebote durante el arranque.
-    pinMode(ENC_SW, INPUT_PULLUP);
-    noInterrupts(); enc_btn_pending=false; enc_sw_isr_count=0; interrupts();
-    attachInterrupt(digitalPinToInterrupt(ENC_SW), enc_sw_isr, FALLING);
-    Serial.printf("[ENC_SW] interrupt adjuntado. GPIO0=%d\n", digitalRead(ENC_SW));
+    // ENC_SW detectado en BIT5 del PCF8574 (I2C 0x21), activo LOW.
+    // Se lee por polling en loop() cada 25ms — no se usa interrupt de GPIO.
 }
 
 // ── LOOP ──────────────────────────────────────────────────────
@@ -1780,57 +1773,32 @@ void loop() {
         }
     }
 
-    // ── DEBUG: poll PCF8574 cada 30ms buscando botón encoder ─────
+    // ── Botón encoder: PCF8574 BIT5, activo LOW ──────────────────
     {
-        static uint8_t       pcf_last  = 0xFF;
-        static bool          pcf_init  = false;
-        static unsigned long pcf_ts    = 0;
-        if(millis()-pcf_ts >= 30){
-            pcf_ts=millis();
+        static uint8_t       pcf_btn_prev = 1;
+        static unsigned long pcf_btn_ts   = 0;
+        if(millis()-pcf_btn_ts >= 25){
+            pcf_btn_ts=millis();
             Wire.requestFrom((uint8_t)PCF8574_ADDR, (uint8_t)1);
             if(Wire.available()){
                 uint8_t v = Wire.read();
-                if(!pcf_init){
-                    pcf_init=true; pcf_last=v;
-                    Serial.printf("[PCF] init  0x%02X  b76543210=%d%d%d%d%d%d%d%d\n", v,
-                        (v>>7)&1,(v>>6)&1,(v>>5)&1,(v>>4)&1,
-                        (v>>3)&1,(v>>2)&1,(v>>1)&1,(v>>0)&1);
+                uint8_t bit5 = (v >> 5) & 1;
+                if(bit5==0 && pcf_btn_prev==1 && millis()-enc_btn_last_ms>200){
+                    enc_btn_last_ms=millis();
+                    last_touch_ms=millis();
+                    if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
+                    if(dial_mode!=DIAL_NONE){
+                        apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
+                    } else if(cur_scr==SCR_TV){
+                        if(enc_mode==ENC_IDLE) focus_enter();
+                        else exec_focus_item();
+                    }
                 }
-                if(v != pcf_last){
-                    uint8_t diff = v ^ pcf_last;
-                    Serial.printf("[PCF] CAMBIO 0x%02X->0x%02X  diff=0x%02X", pcf_last, v, diff);
-                    for(int b=0;b<8;b++)
-                        if((diff>>b)&1) Serial.printf("  BIT%d:%d->%d",b,(pcf_last>>b)&1,(v>>b)&1);
-                    Serial.println("  <<< pulsar encoder aqui");
-                    pcf_last=v;
-                }
+                pcf_btn_prev=bit5;
             }
         }
     }
     // ─────────────────────────────────────────────────────────────
-
-    {
-        bool btn_fired=false;
-        noInterrupts(); if(enc_btn_pending){enc_btn_pending=false;btn_fired=true;} interrupts();
-        if(btn_fired){
-            unsigned long diff=millis()-enc_btn_last_ms;
-            Serial.printf("[BTN ] fired  debounce_diff=%lu  enc_mode=%d  cur_scr=%d\n",
-                diff, (int)enc_mode, (int)cur_scr);
-            if(diff>200){
-                enc_btn_last_ms=millis();
-                last_touch_ms=millis();
-                if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
-                if(dial_mode!=DIAL_NONE){
-                    apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
-                } else if(cur_scr==SCR_TV){
-                    if(enc_mode==ENC_IDLE){ Serial.println("[BTN ] -> focus_enter()"); focus_enter(); }
-                    else { Serial.println("[BTN ] -> exec_focus_item()"); exec_focus_item(); }
-                }
-            } else {
-                Serial.println("[BTN ] rechazado por debounce");
-            }
-        }
-    }
 
     if(cfg_dim_delay>0&&!screen_dimmed)
         if(millis()-last_touch_ms>(unsigned long)cfg_dim_delay*60000UL){

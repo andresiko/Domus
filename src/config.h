@@ -41,6 +41,7 @@
 #define PCF8574_ADDR     0x21
 #define PCF_LCD_POWER    3    // bit 3: alimentación LCD (1=ON)
 #define PCF_LCD_RESET    4    // bit 4: reset LCD (0=reset activo, 1=normal)
+#define PCF_ENC_SW       5    // bit 5: pulsador encoder (activo LOW, poll 25ms)
 
 // --- Encoder ---
 #define ENC_A  42
