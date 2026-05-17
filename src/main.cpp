@@ -1775,24 +1775,33 @@ void loop() {
         }
     }
 
-    // ── DEBUG GPIO0 (ENC_SW) ─────────────────────────────────────
+    // ── DEBUG: buscar botón encoder en PCF8574 (I2C 0x21) ────────
+    // El PCF8574 tiene 8 bits; 3=LCD_POWER 4=LCD_RESET, resto libres.
+    // Pulsa el botón repetidamente y mira qué bit cambia.
     {
-        static int           last_raw     = -1;
-        static uint32_t      last_isr_cnt = 0;
-        static unsigned long dbg_ts       = 0;
-        int raw = digitalRead(ENC_SW);
-        uint32_t cnt; noInterrupts(); cnt=enc_sw_isr_count; interrupts();
-        if(raw != last_raw){
-            Serial.printf("[SW] GPIO0 raw=%d  millis=%lu\n", raw, millis());
-            last_raw = raw;
-        }
-        if(cnt != last_isr_cnt){
-            Serial.printf("[ISR] disparo #%lu  GPIO0=%d  millis=%lu\n", cnt, raw, millis());
-            last_isr_cnt = cnt;
-        }
-        if(millis()-dbg_ts >= 3000){
-            dbg_ts=millis();
-            Serial.printf("[SW] GPIO0=%d  ISR_total=%lu\n", raw, cnt);
+        static uint8_t       last_pcf  = 0xFF;
+        static unsigned long pcf_ts    = 0;
+        static bool          pcf_ready = false;
+        if(millis()-pcf_ts >= 50){ // poll cada 50ms
+            pcf_ts = millis();
+            Wire.requestFrom((uint8_t)0x21, (uint8_t)1);
+            if(Wire.available()){
+                uint8_t v = Wire.read();
+                if(!pcf_ready){ last_pcf=v; pcf_ready=true;
+                    Serial.printf("[PCF] estado inicial: 0x%02X  bits: ", v);
+                    for(int b=7;b>=0;b--) Serial.print((v>>b)&1);
+                    Serial.println();
+                }
+                if(v != last_pcf){
+                    Serial.printf("[PCF] CAMBIO 0x%02X->0x%02X  bits: ", last_pcf, v);
+                    for(int b=7;b>=0;b--) Serial.print((v>>b)&1);
+                    uint8_t diff=v^last_pcf;
+                    for(int b=0;b<8;b++) if((diff>>b)&1)
+                        Serial.printf("  <<< BIT%d %s", b, (v>>b)&1?"1(alto)":"0(bajo)");
+                    Serial.println("  <<< CANDIDATO!");
+                    last_pcf=v;
+                }
+            }
         }
     }
     // ─────────────────────────────────────────────────────────────
