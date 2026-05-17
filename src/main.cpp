@@ -426,11 +426,12 @@ static void hist_init() {
     hist_th = p.getUInt("th", 0);
     hist_eh = p.getUInt("eh", 0);
     p.end();
-    File f = LittleFS.open("/heatmap.bin", "r");
-    if (f && f.size() == sizeof(heatmap)) {
-        f.read((uint8_t*)heatmap, sizeof(heatmap));
+    if (LittleFS.exists("/heatmap.bin")) {
+        File f = LittleFS.open("/heatmap.bin", "r");
+        if (f && f.size() == sizeof(heatmap))
+            f.read((uint8_t*)heatmap, sizeof(heatmap));
+        if (f) f.close();
     }
-    if (f) f.close();
     Serial.printf("[HIST] init  th=%lu  eh=%lu\n", hist_th, hist_eh);
 }
 
@@ -1620,12 +1621,11 @@ void setup() {
     ledcAttachPin(TFT_BL_PIN,0);
     set_brightness(cfg_brightness);
 
-    pinMode(ENC_A,INPUT_PULLUP); pinMode(ENC_B,INPUT_PULLUP); pinMode(ENC_SW,INPUT_PULLUP);
+    pinMode(ENC_A,INPUT_PULLUP); pinMode(ENC_B,INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(ENC_A),enc_isr,CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_B),enc_isr,CHANGE);
-    // DEBUG: probar CHANGE para capturar cualquier flanco; sin PULLUP para ver si hay pull externo
-    pinMode(ENC_SW, INPUT);
-    attachInterrupt(digitalPinToInterrupt(ENC_SW),enc_sw_isr,CHANGE);
+    // GPIO0 es strapping pin (permanentemente LOW) — no es el botón.
+    // Candidatos para ENC_SW: 33,34,35,36,37 — el scanner en loop() identifica cuál es.
 
     display->begin();
     lv_init();
@@ -1773,28 +1773,33 @@ void loop() {
         }
     }
 
-    // ── DEBUG ENCODER SW ── (quitar cuando funcione) ─────────────
+    // ── SCANNER: buscar el pin del botón encoder ─────────────────
+    // Pulsa el botón repetidamente y mira qué GPIO cambia en el monitor.
     {
-        static uint32_t  last_isr_cnt  = 0;
-        static int       last_raw      = -1; // -1 = no inicializado
-        static unsigned long last_raw_print = 0;
-        int raw = digitalRead(ENC_SW);
-        uint32_t cnt; noInterrupts(); cnt=enc_sw_isr_count; interrupts();
-        // Imprimir en cada cambio de estado del pin
-        if(raw != last_raw){
-            Serial.printf("[PIN ] GPIO%d raw=%d  millis=%lu\n", ENC_SW, raw, millis());
-            last_raw = raw;
+        static const uint8_t CAND[] = {33,34,35,36,37,43,44};
+        static int prev_cand[7];
+        static bool cand_init = false;
+        static unsigned long scan_print_ts = 0;
+        if(!cand_init){
+            for(int i=0;i<7;i++){
+                pinMode(CAND[i], INPUT_PULLUP);
+                prev_cand[i] = digitalRead(CAND[i]);
+            }
+            cand_init = true;
         }
-        // Imprimir cuando ISR dispara
-        if(cnt != last_isr_cnt){
-            Serial.printf("[ISR ] disparo #%lu  GPIO%d raw=%d  millis=%lu\n",
-                cnt, ENC_SW, raw, millis());
-            last_isr_cnt = cnt;
+        for(int i=0;i<7;i++){
+            int v = digitalRead(CAND[i]);
+            if(v != prev_cand[i]){
+                Serial.printf("[SCAN] GPIO%u: %d -> %d  millis=%lu  <<< CANDIDATO SW!\n",
+                    CAND[i], prev_cand[i], v, millis());
+                prev_cand[i] = v;
+            }
         }
-        // Print periódico cada 2s para confirmar el estado actual
-        if(millis()-last_raw_print >= 2000){
-            last_raw_print=millis();
-            Serial.printf("[ENC ] GPIO%d=%d  ISR_count=%lu\n", ENC_SW, raw, cnt);
+        if(millis()-scan_print_ts >= 3000){
+            scan_print_ts = millis();
+            Serial.print("[SCAN] estado: ");
+            for(int i=0;i<7;i++) Serial.printf("G%u=%d ", CAND[i], prev_cand[i]);
+            Serial.println();
         }
     }
     // ─────────────────────────────────────────────────────────────
