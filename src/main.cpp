@@ -1780,14 +1780,31 @@ void loop() {
         }
     }
 
-    // ── DEBUG ENC_SW (quitar cuando funcione) ────────────────────
+    // ── DEBUG: poll PCF8574 cada 30ms buscando botón encoder ─────
     {
-        static uint32_t last_cnt = 0;
-        uint32_t cnt; noInterrupts(); cnt=enc_sw_isr_count; interrupts();
-        if(cnt != last_cnt){
-            Serial.printf("[ISR] ENC_SW disparo  GPIO0=%d  total=%lu  ms=%lu\n",
-                digitalRead(ENC_SW), cnt, millis());
-            last_cnt=cnt;
+        static uint8_t       pcf_last  = 0xFF;
+        static bool          pcf_init  = false;
+        static unsigned long pcf_ts    = 0;
+        if(millis()-pcf_ts >= 30){
+            pcf_ts=millis();
+            Wire.requestFrom((uint8_t)PCF8574_ADDR, (uint8_t)1);
+            if(Wire.available()){
+                uint8_t v = Wire.read();
+                if(!pcf_init){
+                    pcf_init=true; pcf_last=v;
+                    Serial.printf("[PCF] init  0x%02X  b76543210=%d%d%d%d%d%d%d%d\n", v,
+                        (v>>7)&1,(v>>6)&1,(v>>5)&1,(v>>4)&1,
+                        (v>>3)&1,(v>>2)&1,(v>>1)&1,(v>>0)&1);
+                }
+                if(v != pcf_last){
+                    uint8_t diff = v ^ pcf_last;
+                    Serial.printf("[PCF] CAMBIO 0x%02X->0x%02X  diff=0x%02X", pcf_last, v, diff);
+                    for(int b=0;b<8;b++)
+                        if((diff>>b)&1) Serial.printf("  BIT%d:%d->%d",b,(pcf_last>>b)&1,(v>>b)&1);
+                    Serial.println("  <<< pulsar encoder aqui");
+                    pcf_last=v;
+                }
+            }
         }
     }
     // ─────────────────────────────────────────────────────────────
