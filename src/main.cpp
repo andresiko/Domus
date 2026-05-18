@@ -1975,15 +1975,13 @@ void setup() {
     lv_init();
 
     lv_display_t *disp=lv_display_create(TFT_WIDTH,TFT_HEIGHT);
-    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565); // forzar 2 bytes/pixel
     lv_display_set_flush_cb(disp,lvgl_flush_cb);
 
-    // 2 bytes/pixel explícito — LVGL 9.5 usa RGB888 por defecto si no se especifica
-    size_t buf_sz=(size_t)TFT_WIDTH*10*2;
-    uint8_t *buf1=(uint8_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
-    if(!buf1) buf1=(uint8_t*)malloc(buf_sz);
+    size_t buf_sz=(size_t)TFT_WIDTH*10*sizeof(lv_color_t);
+    lv_color_t *buf1=(lv_color_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
+    if(!buf1) buf1=(lv_color_t*)malloc(buf_sz);
     lv_display_set_buffers(disp,buf1,nullptr,buf_sz,LV_DISPLAY_RENDER_MODE_PARTIAL);
-    Serial.printf("[MEM] Buffer LVGL: %u bytes (%u B/px)\n", buf_sz, (unsigned)(buf_sz/TFT_WIDTH/10));
+    Serial.printf("[MEM] LVGL buf: %u bytes (sizeof lv_color_t=%u)\n", buf_sz, (unsigned)sizeof(lv_color_t));
 
     esp_timer_handle_t lt;
     esp_timer_create_args_t la={.callback=[](void*){lv_tick_inc(2);},.arg=nullptr,.name="lv"};
