@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v1.9 - heatmap presencia + fix Te historial + autoescala Y"
+#define FW_VERSION "v2.0 - menu historial + visor registro + fix swipe + fix PIN"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -93,10 +93,11 @@ static bool intruder_active = false;
 static bool critical_alert  = false;
 
 // ── PIN ──────────────────────────────────────────────────────
-static char cfg_pin[5] = "1234";
-static char pin_buf[5] = {};
-static int  pin_len    = 0;
-static bool pin_for_arm = true;
+static char          cfg_pin[5]    = "1234";
+static char          pin_buf[5]    = {};
+static int           pin_len       = 0;
+static bool          pin_for_arm   = true;
+static unsigned long pin_open_ts   = 0; // debounce toque fantasma del encoder
 
 // ── Sirena / beeps ───────────────────────────────────────────
 static unsigned long siren_off_at = 0;
@@ -190,7 +191,7 @@ static void lvgl_flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px) {
 }
 
 // ── Navegación (enum y estado antes de touch_read_cb) ────────
-enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN, SCR_GRAPH, SCR_HEATMAP };
+enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN, SCR_GRAPH, SCR_HEATMAP, SCR_HIST_MENU, SCR_LOG };
 static Screen cur_scr=SCR_TV, pend_scr=SCR_TV;
 static bool   scr_change=false;
 
@@ -227,14 +228,18 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             if (!sw_down) { sw_sx = tx; sw_sy = ty; sw_down = true; }
             sw_lx = tx; sw_ly = ty;
         } else {
+            bool swipe_fired = false;
             if (sw_down && cur_scr == SCR_TV) {
                 int dx = sw_lx - sw_sx, dy = sw_ly - sw_sy;
                 if (abs(dx) > abs(dy) && abs(dx) > 70)
-                    sw_dc = (dx < 0) ? 1 : -1;
+                    { sw_dc = (dx < 0) ? 1 : -1; swipe_fired = true; }
                 else if (abs(dy) > abs(dx) && abs(dy) > 70)
-                    sw_dr = (dy < 0) ? 1 : -1;
+                    { sw_dr = (dy < 0) ? 1 : -1; swipe_fired = true; }
             }
             sw_down = false;
+            // Si fue swipe, desplazar el release fuera de pantalla para que
+            // LVGL no dispare LV_EVENT_CLICKED en el botón que estaba bajo el dedo
+            if (swipe_fired) { data->point.x = -1; data->point.y = -1; }
             data->state = LV_INDEV_STATE_RELEASED;
         }
     } else { while(Wire.available()) Wire.read(); data->state=LV_INDEV_STATE_RELEASED; }
@@ -270,6 +275,10 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
+static lv_obj_t           *scr_hist_menu = nullptr;
+static lv_obj_t           *scr_log       = nullptr;
+static lv_obj_t           *log_list      = nullptr;
+static uint32_t            log_day_off   = 0;
 static lv_obj_t           *chart_temp    = nullptr;
 static lv_chart_series_t  *ser_int_g     = nullptr;
 static lv_chart_series_t  *ser_ext_g     = nullptr;
@@ -458,6 +467,7 @@ static void hist_init() {
 static void focus_exit();
 static void sync_tile_cycle_idx();
 static void cb_open_graph(lv_event_t *e);
+static void cb_open_hist_menu(lv_event_t *e);
 
 // ── Navegación de tiles ──────────────────────────────────────
 // Layout: alarm(1,0) sensors(0,1) home(1,1) relays(2,1) settings(1,2)
@@ -1398,6 +1408,184 @@ static void build_scr_heatmap() {
     make_big_btn(scr_heatmap,"SALIR",COL_OFF,140,200,44,cb_heatmap_exit,nullptr);
 }
 
+// ── VISOR LOG ────────────────────────────────────────────────
+
+static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
+    switch((EvtType)t){
+        case EVT_SYSTEM_BOOT:   return "Arranque";
+        case EVT_RELAY_AGUA:    return v ? "Agua ON"     : "Agua OFF";
+        case EVT_RELAY_CALEF:   return v ? "Calef ON"    : "Calef OFF";
+        case EVT_RELAY_SIRENA:  return v ? "Sirena ON"   : "Sirena OFF";
+        case EVT_HEAT_MODE:     return aux==HM_OFF?"Calef OFF":aux==HM_MANUAL?"Calef Manual":"Calef Consigna";
+        case EVT_ALARM_ARM:     return "Alarma ARMADA";
+        case EVT_ALARM_DISARM:  return "Alarma Desarmada";
+        case EVT_ALARM_TRIGGER: return "INTRUSION";
+        case EVT_PRESENCE:      return "Presencia";
+        case EVT_FLOOD:         return v ? "Inund. ACTIVA" : "Inund. OK";
+        case EVT_SMOKE:         return v ? "Humo ACTIVO"   : "Humo OK";
+        default:                return "?";
+    }
+}
+
+static void log_load() {
+    if(!log_list) return;
+    lv_obj_clean(log_list);
+    File f = LittleFS.open("/evt.bin","r");
+    if(!f){ lv_list_add_text(log_list,"Sin registros"); return; }
+    uint32_t total = f.size() / sizeof(EvtRec);
+    if(total==0){ f.close(); lv_list_add_text(log_list,"Sin registros"); return; }
+    uint32_t count = total < MAX_EVT ? total : MAX_EVT;
+
+    // Calcular rango de fechas a mostrar según log_day_off
+    time_t now = time(NULL);
+    time_t day_start, day_end;
+    {
+        struct tm t; localtime_r(&now, &t);
+        t.tm_hour=0; t.tm_min=0; t.tm_sec=0;
+        time_t today = mktime(&t);
+        day_start = today - (time_t)log_day_off * 86400L;
+        day_end   = day_start + 86400L;
+    }
+
+    // Recorrer en orden inverso (más reciente primero)
+    uint32_t added = 0;
+    uint32_t head = hist_eh; // apunta al siguiente a escribir = el más antiguo en buffer lleno
+    for(uint32_t i=0; i<count && added<200; i++){
+        uint32_t idx = (head + count - 1 - i) % MAX_EVT;
+        EvtRec r;
+        f.seek(idx * sizeof(EvtRec));
+        if(f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
+        if(r.ts < 1000000000UL) continue;
+        time_t ts = (time_t)r.ts;
+        if(ts < day_start || ts >= day_end) {
+            if(ts < day_start) break; // más antiguo que el día, parar
+            continue;
+        }
+        struct tm t; localtime_r(&ts, &t);
+        char line[48];
+        snprintf(line, sizeof(line), "%02d/%02d %02d:%02d  %s",
+            t.tm_mday, t.tm_mon+1, t.tm_hour, t.tm_min,
+            evt_name(r.type, r.value, r.aux));
+        lv_list_add_text(log_list, line);
+        added++;
+    }
+    f.close();
+    if(added==0) lv_list_add_text(log_list,"Sin eventos ese día");
+}
+
+static lv_obj_t *lbl_log_date = nullptr;
+static void log_update_date_label() {
+    if(!lbl_log_date) return;
+    if(log_day_off==0){ lv_label_set_text(lbl_log_date,"Hoy"); return; }
+    time_t now = time(NULL);
+    struct tm t; localtime_r(&now, &t);
+    t.tm_hour=0; t.tm_min=0; t.tm_sec=0;
+    time_t d = mktime(&t) - (time_t)log_day_off * 86400L;
+    struct tm td; localtime_r(&d, &td);
+    char buf[12]; snprintf(buf,sizeof(buf),"%02d/%02d/%04d",td.tm_mday,td.tm_mon+1,td.tm_year+1900);
+    lv_label_set_text(lbl_log_date, buf);
+}
+
+static void cb_log_nav(lv_event_t *e) {
+    int d = (int)(intptr_t)lv_event_get_user_data(e);
+    if(d < 0 && log_day_off == 0) return;
+    log_day_off = (uint32_t)((int32_t)log_day_off - d);
+    if((int32_t)log_day_off < 0) log_day_off = 0;
+    log_update_date_label();
+    log_load();
+}
+static void cb_log_exit(lv_event_t *e) { go_to(SCR_TV); }
+
+static void build_scr_log() {
+    scr_log = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr_log, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Título + fecha
+    centered_label(scr_log,"REGISTRO",&lv_font_montserrat_20,COL_TEXT,-210);
+    lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_14,COL_MUTED,-188);
+
+    // Lista scrollable (zona izquierda, deja 72px a la derecha para botones)
+    log_list = lv_list_create(scr_log);
+    lv_obj_set_pos(log_list, 4, 34);
+    lv_obj_set_size(log_list, 400, 390);
+    lv_obj_set_style_bg_color(log_list, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(log_list, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(log_list, 0, 0);
+    lv_obj_set_style_pad_all(log_list, 2, 0);
+    lv_obj_set_style_text_font(log_list, &lv_font_montserrat_14, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(log_list, lv_color_hex(COL_TEXT), LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(log_list, lv_color_hex(COL_CARD), LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(log_list, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_pad_top(log_list, 4, LV_PART_ITEMS);
+    lv_obj_set_style_pad_bottom(log_list, 4, LV_PART_ITEMS);
+    lv_obj_set_style_pad_left(log_list, 6, LV_PART_ITEMS);
+
+    // Botones navegación (columna derecha)
+    // día +1 (arriba → más antiguo), día -1 (más reciente), semana +7, semana -7
+    struct { const char *lbl; int delta; int y; } NAVBTNS[] = {
+        {LV_SYMBOL_UP "  7d",  7, 60},
+        {LV_SYMBOL_UP "  1d",  1,120},
+        {LV_SYMBOL_DOWN "  1d", -1,180},
+        {LV_SYMBOL_DOWN "  7d", -7,240},
+    };
+    for(auto &nb : NAVBTNS){
+        lv_obj_t *b = lv_obj_create(scr_log);
+        lv_obj_set_size(b, 68, 50);
+        lv_obj_set_pos(b, 406, nb.y);
+        lv_obj_set_style_bg_color(b, lv_color_hex(COL_OFF), 0);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_pad_all(b, 0, 0);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b, cb_log_nav, LV_EVENT_CLICKED, (void*)(intptr_t)nb.delta);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, nb.lbl);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
+        lv_obj_center(l);
+    }
+
+    // Botón SALIR
+    lv_obj_t *bsal = lv_obj_create(scr_log);
+    lv_obj_set_size(bsal, 68, 50);
+    lv_obj_set_pos(bsal, 406, 360);
+    lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_RELAY_DIM), 0);
+    lv_obj_set_style_radius(bsal, 8, 0);
+    lv_obj_set_style_border_width(bsal, 0, 0);
+    lv_obj_set_style_pad_all(bsal, 0, 0);
+    lv_obj_clear_flag(bsal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bsal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(bsal, cb_log_exit, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lsal = lv_label_create(bsal);
+    lv_label_set_text(lsal, "SALIR");
+    lv_obj_set_style_text_font(lsal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lsal, lv_color_hex(COL_TEXT), 0);
+    lv_obj_center(lsal);
+}
+
+// ── BUILD SCREEN HIST MENU ───────────────────────────────────
+
+static void cb_open_hist_menu(lv_event_t *e) { go_to(SCR_HIST_MENU); }
+static void cb_hist_temp(lv_event_t *e)  { cb_open_graph(nullptr); }
+static void cb_hist_pres(lv_event_t *e)  { go_to(SCR_HEATMAP); }
+static void cb_hist_log(lv_event_t *e)   { log_day_off=0; go_to(SCR_LOG); }
+static void cb_hist_exit(lv_event_t *e)  { go_to(SCR_TV); }
+
+static void build_scr_hist_menu() {
+    scr_hist_menu = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr_hist_menu, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(scr_hist_menu, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr_hist_menu, LV_OBJ_FLAG_SCROLLABLE);
+    centered_label(scr_hist_menu,"HISTORIAL",&lv_font_montserrat_20,COL_TEXT,-180);
+    make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -60,280,56,cb_hist_temp,nullptr);
+    make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,280,56,cb_hist_pres,nullptr);
+    make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   76,280,56,cb_hist_log, nullptr);
+    make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        160,280,48,cb_hist_exit,nullptr);
+}
+
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
 static void cb_open_brightness(lv_event_t *e){ open_dial(DIAL_BRIGHTNESS); }
 static void cb_open_dim(lv_event_t *e)       { open_dial(DIAL_DIM); }
@@ -1444,8 +1632,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    btn_settings_hist=make_big_btn(tile_settings,"Historial Temp",COL_RELAY_DIM,+146,260,46,cb_open_graph,nullptr);
-    make_big_btn(tile_settings,"Presencia",COL_RELAY_DIM,+200,260,46,cb_open_heatmap,nullptr);
+    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_RELAY_DIM,+146,260,46,cb_open_hist_menu,nullptr);
 
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
@@ -1477,6 +1664,7 @@ static void pin_check() {
     } else { lv_label_set_text(lbl_pin_msg,"PIN incorrecto"); memset(pin_buf,0,5); pin_len=0; update_pin_dots(); }
 }
 static void cb_pin_key(lv_event_t *e) {
+    if(millis()-pin_open_ts < 350) return; // ignora toques fantasma del encoder
     int d=(int)(intptr_t)lv_event_get_user_data(e);
     if(d==-2){ memset(pin_buf,0,5); pin_len=0; go_to(SCR_TV); }
     else if(d==-1){ if(pin_len>0){pin_len--;pin_buf[pin_len]=0;} update_pin_dots(); }
@@ -1776,6 +1964,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_ALARM_CRIT; return;
         case SCR_PIN:
             update_pin_dots(); lv_label_set_text(lbl_pin_msg,"");
+            pin_open_ts=millis();
             lv_scr_load_anim(scr_pin,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_PIN; return;
         case SCR_ARMING_SCR:
@@ -1799,6 +1988,15 @@ static void do_switch(Screen s) {
             if(!scr_heatmap) build_scr_heatmap();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_HEATMAP; return;
+        case SCR_HIST_MENU:
+            if(!scr_hist_menu) build_scr_hist_menu();
+            lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            cur_scr=SCR_HIST_MENU; return;
+        case SCR_LOG:
+            if(!scr_log) build_scr_log();
+            log_update_date_label(); log_load();
+            lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            cur_scr=SCR_LOG; return;
     }
 }
 
@@ -1934,7 +2132,7 @@ static void exec_focus_item() {
     else if(w==btn_settings_dim)  cb_open_dim(nullptr);
     else if(w==btn_settings_pin)  cb_open_change_pin(nullptr);
     else if(w==btn_settings_anim) cb_cycle_anim(nullptr);
-    else if(w==btn_settings_hist) cb_open_graph(nullptr);
+    else if(w==btn_settings_hist) cb_open_hist_menu(nullptr);
     else if(w==btn_arm)           cb_go_pin(nullptr);
     else if(w==lbl_alarm_badge)   cb_alarm_badge(nullptr);
     else if(w==lbl_sistema)       cb_settings_icon(nullptr);
@@ -2149,7 +2347,7 @@ void loop() {
                     if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
                     if(dial_mode!=DIAL_NONE){
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
-                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP){
+                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_HIST_MENU||cur_scr==SCR_LOG){
                         go_to(SCR_TV);
                     } else if(cur_scr==SCR_TV){
                         if(enc_mode==ENC_IDLE) focus_enter();
