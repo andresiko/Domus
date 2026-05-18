@@ -1796,6 +1796,7 @@ static void do_switch(Screen s) {
             lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
+            if(!scr_heatmap) build_scr_heatmap();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_HEATMAP; return;
     }
@@ -2017,7 +2018,7 @@ void setup() {
     Serial.println("[UI] build scr_arming..."); build_scr_arming();
     Serial.println("[UI] build scr_dial...");   build_scr_dial();
     Serial.println("[UI] build scr_graph...");  build_scr_graph();
-    Serial.println("[UI] build scr_heatmap..."); build_scr_heatmap();
+    // scr_heatmap: lazy — se construye la primera vez que se abre
     Serial.println("[UI] builds OK, loading screen...");
 
     lv_tileview_set_tile(tv,tile_home,LV_ANIM_OFF);
