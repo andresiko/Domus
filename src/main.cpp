@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v1.6 - graph temperatura"
+#define FW_VERSION "v1.7 - graph 2 series + scroll + zoom"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -268,11 +268,17 @@ static lv_obj_t *lbl_broker_status=nullptr, *lbl_cfg_anim=nullptr;
 static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_dial=nullptr, *scr_change_pin=nullptr;
 
 // Graph
-static lv_obj_t           *scr_graph       = nullptr;
-static lv_obj_t           *chart_temp      = nullptr;
-static lv_chart_series_t  *ser_int_g       = nullptr;
-static lv_obj_t           *btn_graph_range[4] = {};
-static uint8_t             graph_range_idx = 1; // 0=6H,1=24H,2=3D,3=7D
+static lv_obj_t           *scr_graph     = nullptr;
+static lv_obj_t           *chart_temp    = nullptr;
+static lv_chart_series_t  *ser_int_g     = nullptr;
+static lv_chart_series_t  *ser_ext_g     = nullptr;
+static lv_obj_t           *lbl_graph_t0  = nullptr; // tiempo inicio visible
+static lv_obj_t           *lbl_graph_t1  = nullptr; // tiempo medio
+static lv_obj_t           *lbl_graph_t2  = nullptr; // tiempo fin visible
+static lv_obj_t           *lbl_graph_zoom= nullptr; // indicador zoom
+static int32_t             graph_offset_samp = 0;   // muestras desplazadas hacia atrás
+static uint32_t            graph_zoom_h   = 24;     // horas visibles
+static uint32_t            graph_t0m=0, graph_t1m=0, graph_t2m=0; // epoch_min de los 3 puntos
 static lv_obj_t *lbl_chpin_title=nullptr, *lbl_chpin_dots=nullptr, *lbl_chpin_msg=nullptr;
 static char chpin_buf[5]={};
 static int  chpin_len=0, chpin_phase=0;
@@ -1072,106 +1078,179 @@ static void build_scr_change_pin() {
 }
 
 // ── GRAPH TEMPERATURA ────────────────────────────────────────
-static const uint32_t GRAPH_RANGE_S[] = {72, 288, 864, 2016}; // 6H,24H,3D,7D (muestras a 5min)
-static const char    *GRAPH_RANGE_LBL[] = {"6H","24H","3D","7D"};
+// Colores series (valores BGR para display RGB-invertido):
+// 0xFF4000 → azul en pantalla (Ti interior)
+// 0x0040FF → rojo en pantalla (Te exterior)
 
-static void graph_update_range_btns() {
-    for(int i = 0; i < 4; i++) {
-        if(!btn_graph_range[i]) continue;
-        lv_obj_set_style_bg_color(btn_graph_range[i],
-            lv_color_hex(i == graph_range_idx ? COL_RELAY_ON : COL_CARD), 0);
+static void fmt_hm(uint32_t epoch_min, char *buf, int n) {
+    if(!epoch_min){ snprintf(buf,n,"--:--"); return; }
+    time_t t=(time_t)(epoch_min*60); struct tm tm; localtime_r(&t,&tm);
+    snprintf(buf,n,"%02d:%02d",tm.tm_hour,tm.tm_min);
+}
+
+static void graph_update_xlabels() {
+    char b[8];
+    if(lbl_graph_t0){ fmt_hm(graph_t0m,b,sizeof(b)); lv_label_set_text(lbl_graph_t0,b); }
+    if(lbl_graph_t1){ fmt_hm(graph_t1m,b,sizeof(b)); lv_label_set_text(lbl_graph_t1,b); }
+    if(lbl_graph_t2){ fmt_hm(graph_t2m,b,sizeof(b)); lv_label_set_text(lbl_graph_t2,b); }
+    if(lbl_graph_zoom){
+        char zb[8];
+        if(graph_zoom_h>=24) snprintf(zb,sizeof(zb),"%lud",(unsigned long)(graph_zoom_h/24));
+        else                 snprintf(zb,sizeof(zb),"%luh",(unsigned long)graph_zoom_h);
+        lv_label_set_text(lbl_graph_zoom,zb);
     }
 }
 
 static void graph_load() {
-    if(!chart_temp || !ser_int_g) return;
-    uint32_t total = GRAPH_RANGE_S[graph_range_idx];
-    uint32_t avail = (hist_th < MAX_TEMP) ? hist_th : MAX_TEMP;
-    uint32_t n     = (total < avail) ? total : avail;
-    uint16_t pts   = (uint16_t)((n < 120) ? n : 120);
-    if(pts < 2) pts = 2;
-    lv_chart_set_point_count(chart_temp, pts);
-    int32_t *ydata = lv_chart_get_y_array(chart_temp, ser_int_g);
-    if(!ydata){ lv_chart_refresh(chart_temp); return; }
-    for(uint16_t i = 0; i < pts; i++) ydata[i] = LV_CHART_POINT_NONE;
-    if(n == 0){ lv_chart_refresh(chart_temp); return; }
-    File f = LittleFS.open("/temp.bin", "r");
-    if(!f){ lv_chart_refresh(chart_temp); return; }
-    uint32_t start = hist_th - n;
-    uint32_t step  = n / pts; if(step < 1) step = 1;
+    if(!chart_temp||!ser_int_g||!ser_ext_g) return;
+    uint32_t avail=(hist_th<MAX_TEMP)?hist_th:MAX_TEMP;
+    uint32_t window_samp=graph_zoom_h*12; // 12 muestras/hora a 5min
+    if(window_samp<2) window_samp=2;
+    // Clamp offset
+    if(avail>window_samp){ uint32_t mo=avail-window_samp; if((uint32_t)graph_offset_samp>mo) graph_offset_samp=(int32_t)mo; }
+    else graph_offset_samp=0;
+    if(graph_offset_samp<0) graph_offset_samp=0;
+    uint32_t off=(uint32_t)graph_offset_samp;
+    graph_t0m=graph_t1m=graph_t2m=0;
+    if(avail==0||hist_th==0||off>=avail){ graph_update_xlabels(); lv_chart_refresh(chart_temp); return; }
+    uint32_t end_idx=hist_th-1-off;
+    uint32_t n=(window_samp<=(end_idx+1))?window_samp:(end_idx+1);
+    if(n<2){ graph_update_xlabels(); lv_chart_refresh(chart_temp); return; }
+    uint32_t start_idx=end_idx-n+1;
+    uint16_t pts=(uint16_t)(n<120?n:120); if(pts<2) pts=2;
+    lv_chart_set_point_count(chart_temp,pts);
+    int32_t *yi=lv_chart_get_y_array(chart_temp,ser_int_g);
+    int32_t *ye=lv_chart_get_y_array(chart_temp,ser_ext_g);
+    if(!yi||!ye){ lv_chart_refresh(chart_temp); return; }
+    for(uint16_t i=0;i<pts;i++){ yi[i]=LV_CHART_POINT_NONE; ye[i]=LV_CHART_POINT_NONE; }
+    File f=LittleFS.open("/temp.bin","r");
+    if(!f){ graph_update_xlabels(); lv_chart_refresh(chart_temp); return; }
+    uint32_t step=n/pts; if(step<1) step=1;
     TmpRec rec;
-    for(uint16_t i = 0; i < pts; i++){
-        uint32_t idx = start + (uint32_t)i * step;
-        f.seek(idx * sizeof(TmpRec));
-        if(f.read((uint8_t*)&rec, sizeof(rec)) == sizeof(rec) && rec.t_int != INT16_MIN)
-            ydata[i] = (int32_t)(rec.t_int / 10);
+    for(uint16_t i=0;i<pts;i++){
+        uint32_t idx=start_idx+(uint32_t)i*step;
+        f.seek(idx*sizeof(TmpRec));
+        if(f.read((uint8_t*)&rec,sizeof(rec))==sizeof(rec)){
+            if(rec.t_int!=INT16_MIN) yi[i]=(int32_t)(rec.t_int/10);
+            if(rec.t_ext!=INT16_MIN) ye[i]=(int32_t)(rec.t_ext/10);
+            if(i==0)             graph_t0m=rec.ts_min;
+            if(i==(uint16_t)(pts/2)) graph_t1m=rec.ts_min;
+            if(i==(uint16_t)(pts-1)) graph_t2m=rec.ts_min;
+        }
     }
     f.close();
+    graph_update_xlabels();
     lv_chart_refresh(chart_temp);
 }
 
-static void cb_graph_range(lv_event_t *e) {
-    graph_range_idx = (uint8_t)(intptr_t)lv_event_get_user_data(e);
-    graph_update_range_btns();
-    graph_load();
-}
+static void cb_graph_zoomin (lv_event_t *e){ if(graph_zoom_h>1){ graph_zoom_h=(graph_zoom_h<=2)?1:(graph_zoom_h/2); graph_load(); } }
+static void cb_graph_zoomout(lv_event_t *e){ if(graph_zoom_h<168){ graph_zoom_h=min(168u,graph_zoom_h*2); graph_load(); } }
+static void cb_graph_exit   (lv_event_t *e){ go_to(SCR_TV); }
 
 static void cb_open_graph(lv_event_t *e) {
-    graph_load();
-    graph_update_range_btns();
-    go_to(SCR_GRAPH);
+    graph_offset_samp=0; graph_zoom_h=24; graph_load(); go_to(SCR_GRAPH);
 }
 
 static void build_scr_graph() {
-    scr_graph = lv_obj_create(nullptr);
-    bg(scr_graph);
-    centered_label(scr_graph, "TEMPERATURA", &lv_font_montserrat_20, COL_TEXT, -195);
+    scr_graph=lv_obj_create(nullptr); bg(scr_graph);
+    centered_label(scr_graph,"TEMPERATURA",&lv_font_montserrat_20,COL_TEXT,-195);
 
-    // Botones de rango: 4 × 78px con gap 6px
-    const int BW = 78, BH = 34, GAP = 6;
-    // offsets X desde centro: -126, -42, +42, +126
-    const int XOFF[] = {-126, -42, 42, 126};
-    for(int i = 0; i < 4; i++){
-        lv_obj_t *b = lv_obj_create(scr_graph);
-        lv_obj_set_size(b, BW, BH);
-        lv_obj_align(b, LV_ALIGN_CENTER, XOFF[i], -155);
-        lv_obj_set_style_bg_color(b, lv_color_hex(i == graph_range_idx ? COL_RELAY_ON : COL_CARD), 0);
-        lv_obj_set_style_radius(b, BH / 2, 0);
-        lv_obj_set_style_border_width(b, 0, 0);
-        lv_obj_set_style_pad_all(b, 0, 0);
-        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(b, cb_graph_range, LV_EVENT_CLICKED, (void*)(intptr_t)i);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, GRAPH_RANGE_LBL[i]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
-        lv_obj_center(l);
-        btn_graph_range[i] = b;
+    // Etiquetas eje Y: -10,0,10,20,30,40 a la izquierda de la gráfica
+    // Chart 360×240 centrado en y=-15. Chart top abs=105 → y_center=-135.
+    // Inner height=232px. Para valor V: y_off = -131 + 232*(40-V)/50
+    static const int8_t  YVALS[]={40,30,20,10,0,-10};
+    static const char   *YLBLS[]={"40","30","20","10","0","-10"};
+    for(int i=0;i<6;i++){
+        int yoff=-131+(int)(232*(40-YVALS[i])/50);
+        lv_obj_t *l=lv_label_create(scr_graph);
+        lv_label_set_text(l,YLBLS[i]);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
+        lv_obj_align(l,LV_ALIGN_CENTER,-190,yoff);
     }
 
     // Gráfica
-    chart_temp = lv_chart_create(scr_graph);
-    lv_obj_set_size(chart_temp, 360, 220);
-    lv_obj_align(chart_temp, LV_ALIGN_CENTER, 0, +5);
-    lv_chart_set_type(chart_temp, LV_CHART_TYPE_LINE);
-    lv_obj_set_style_bg_color(chart_temp, lv_color_hex(0x101018), 0);
-    lv_obj_set_style_bg_opa(chart_temp, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(chart_temp, lv_color_hex(COL_MUTED), 0);
-    lv_obj_set_style_border_width(chart_temp, 1, 0);
-    lv_obj_set_style_pad_all(chart_temp, 4, LV_PART_MAIN);
-    lv_obj_clear_flag(chart_temp, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(chart_temp, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_line_color(chart_temp, lv_color_hex(0x202030), LV_PART_MAIN);
-    lv_chart_set_range(chart_temp, LV_CHART_AXIS_PRIMARY_Y, 10, 35);
-    lv_chart_set_div_line_count(chart_temp, 5, 5);
-    ser_int_g = lv_chart_add_series(chart_temp, lv_color_hex(COL_TEXT), LV_CHART_AXIS_PRIMARY_Y);
-    lv_obj_set_style_size(chart_temp, 0, 0, LV_PART_INDICATOR); // sin puntos
-    lv_chart_set_point_count(chart_temp, 120);
-    lv_chart_set_all_value(chart_temp, ser_int_g, LV_CHART_POINT_NONE);
+    chart_temp=lv_chart_create(scr_graph);
+    lv_obj_set_size(chart_temp,360,240);
+    lv_obj_align(chart_temp,LV_ALIGN_CENTER,0,-15);
+    lv_chart_set_type(chart_temp,LV_CHART_TYPE_LINE);
+    lv_obj_set_style_bg_color(chart_temp,lv_color_hex(0x101018),0);
+    lv_obj_set_style_bg_opa(chart_temp,LV_OPA_COVER,0);
+    lv_obj_set_style_border_color(chart_temp,lv_color_hex(COL_MUTED),0);
+    lv_obj_set_style_border_width(chart_temp,1,0);
+    lv_obj_set_style_pad_all(chart_temp,4,LV_PART_MAIN);
+    lv_obj_clear_flag(chart_temp,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(chart_temp,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_line_color(chart_temp,lv_color_hex(0x202030),LV_PART_MAIN);
+    lv_chart_set_range(chart_temp,LV_CHART_AXIS_PRIMARY_Y,-10,40);
+    lv_chart_set_div_line_count(chart_temp,5,5); // 5 guías horizontales (cada 10°C)
+    lv_obj_set_style_size(chart_temp,0,0,LV_PART_INDICATOR); // sin puntos individuales
+    ser_int_g=lv_chart_add_series(chart_temp,lv_color_hex(0xFF4000),LV_CHART_AXIS_PRIMARY_Y); // Ti=azul
+    ser_ext_g=lv_chart_add_series(chart_temp,lv_color_hex(0x0040FF),LV_CHART_AXIS_PRIMARY_Y); // Te=rojo
+    lv_chart_set_point_count(chart_temp,120);
+    lv_chart_set_all_value(chart_temp,ser_int_g,LV_CHART_POINT_NONE);
+    lv_chart_set_all_value(chart_temp,ser_ext_g,LV_CHART_POINT_NONE);
 
-    centered_label(scr_graph, "Girar: rango  |  Pulsar: salir",
-                   &lv_font_montserrat_14, COL_MUTED, +155);
+    // Leyenda Ti/Te dentro de la gráfica (esquina superior derecha)
+    { lv_obj_t *l=lv_label_create(scr_graph);
+      lv_label_set_text(l,"Ti"); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(0xFF4000),0);
+      lv_obj_align(l,LV_ALIGN_CENTER,+143,-118); }
+    { lv_obj_t *l=lv_label_create(scr_graph);
+      lv_label_set_text(l,"Te"); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(0x0040FF),0);
+      lv_obj_align(l,LV_ALIGN_CENTER,+143,-103); }
+
+    // Etiquetas eje X (tiempo): inicio, medio, fin del rango visible
+    lbl_graph_t0=lv_label_create(scr_graph);
+    lv_label_set_text(lbl_graph_t0,"--:--");
+    lv_obj_set_style_text_font(lbl_graph_t0,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(lbl_graph_t0,lv_color_hex(COL_MUTED),0);
+    lv_obj_align(lbl_graph_t0,LV_ALIGN_CENTER,-130,+115);
+
+    lbl_graph_t1=lv_label_create(scr_graph);
+    lv_label_set_text(lbl_graph_t1,"--:--");
+    lv_obj_set_style_text_font(lbl_graph_t1,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(lbl_graph_t1,lv_color_hex(COL_MUTED),0);
+    lv_obj_align(lbl_graph_t1,LV_ALIGN_CENTER,0,+115);
+
+    lbl_graph_t2=lv_label_create(scr_graph);
+    lv_label_set_text(lbl_graph_t2,"--:--");
+    lv_obj_set_style_text_font(lbl_graph_t2,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(lbl_graph_t2,lv_color_hex(COL_MUTED),0);
+    lv_obj_align(lbl_graph_t2,LV_ALIGN_CENTER,+130,+115);
+
+    // Indicador zoom (centro, sobre botones)
+    lbl_graph_zoom=lv_label_create(scr_graph);
+    lv_label_set_text(lbl_graph_zoom,"24h");
+    lv_obj_set_style_text_font(lbl_graph_zoom,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(lbl_graph_zoom,lv_color_hex(COL_MUTED),0);
+    lv_obj_align(lbl_graph_zoom,LV_ALIGN_CENTER,0,+138);
+
+    // Botones inferiores: [−]  [SALIR]  [+]
+    struct BtnDef { const char *txt; int x; int w; lv_event_cb_t cb; uint32_t col; };
+    BtnDef bdefs[]={
+        {"-",    -95, 60, cb_graph_zoomout, COL_CARD},
+        {"SALIR",  0,100, cb_graph_exit,    COL_OFF },
+        {"+",    +95, 60, cb_graph_zoomin,  COL_CARD},
+    };
+    for(auto &d : bdefs){
+        lv_obj_t *b=lv_obj_create(scr_graph);
+        lv_obj_set_size(b,d.w,38);
+        lv_obj_align(b,LV_ALIGN_CENTER,d.x,+165);
+        lv_obj_set_style_bg_color(b,lv_color_hex(d.col),0);
+        lv_obj_set_style_radius(b,19,0);
+        lv_obj_set_style_border_width(b,0,0);
+        lv_obj_set_style_pad_all(b,0,0);
+        lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b,d.cb,LV_EVENT_CLICKED,nullptr);
+        lv_obj_t *l=lv_label_create(b);
+        lv_label_set_text(l,d.txt);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+        lv_obj_center(l);
+    }
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
@@ -1220,7 +1299,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_CARD,+146,260,46,cb_open_graph,nullptr);
+    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_RELAY_DIM,+146,260,46,cb_open_graph,nullptr);
 
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
@@ -1404,10 +1483,11 @@ static void build_focus_lists(){
       f.items[3]=btn_setpoint; f.items[4]=btn_sirena_r;
       f.items[5]=hint_relays;  f.home_nav[5]=true; }
     // 2 = settings tile
-    { FocusList &f=tile_focus[2]; f.count=5;
+    { FocusList &f=tile_focus[2]; f.count=6;
       f.items[0]=btn_settings_br; f.items[1]=btn_settings_dim;
       f.items[2]=btn_settings_pin; f.items[3]=btn_settings_anim;
-      f.items[4]=hint_settings; f.home_nav[4]=true; }
+      f.items[4]=btn_settings_hist;
+      f.items[5]=hint_settings; f.home_nav[5]=true; }
     // 3 = sensors tile (read-only — only HOME nav)
     { FocusList &f=tile_focus[3]; f.count=1;
       f.items[0]=hint_sensors; f.home_nav[0]=true; }
@@ -1866,8 +1946,10 @@ void loop() {
         } else if(cur_scr==SCR_GRAPH){
             enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
             if(steps!=0){
-                graph_range_idx=(uint8_t)((graph_range_idx+steps%4+4)%4);
-                graph_update_range_btns();
+                uint32_t avail=(hist_th<MAX_TEMP)?hist_th:MAX_TEMP;
+                uint32_t win=graph_zoom_h*12;
+                int32_t max_off=(avail>win)?(int32_t)(avail-win):0;
+                graph_offset_samp=constrain(graph_offset_samp+steps,0,max_off);
                 graph_load();
             }
         } else if(cur_scr==SCR_TV){
