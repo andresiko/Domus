@@ -230,14 +230,13 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             if (!sw_down) { sw_sx=tx; sw_sy=ty; sw_down=true; sw_consumed=false; }
             sw_lx = tx; sw_ly = ty;
             // Detectar swipe durante el movimiento (threshold 30px)
-            // → cancelar act_obj ANTES de que LVGL procese el release
             if (!sw_consumed && cur_scr == SCR_TV) {
                 int dx = tx - sw_sx, dy = ty - sw_sy;
                 if (abs(dx) > abs(dy) && abs(dx) > 30) {
                     sw_dc = (dx < 0) ? 1 : -1;
                     sw_consumed = true;
                     swipe_block_until = millis() + 350;
-                    lv_indev_reset(indev, NULL); // cancela act_obj — no habrá click
+                    lv_indev_reset(indev, NULL);
                 } else if (abs(dy) > abs(dx) && abs(dy) > 30) {
                     sw_dr = (dy < 0) ? 1 : -1;
                     sw_consumed = true;
@@ -245,8 +244,16 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
                     lv_indev_reset(indev, NULL);
                 }
             }
-            data->point.x = tx; data->point.y = ty;
-            data->state   = LV_INDEV_STATE_PRESSED;
+            if (sw_consumed) {
+                // Swipe activo: reportar RELEASED para que LVGL no registre
+                // nuevas pulsaciones mientras el dedo sigue en la pantalla.
+                // lv_indev_reset cancelará act_obj en el próximo frame.
+                data->point.x = sw_sx; data->point.y = sw_sy;
+                data->state   = LV_INDEV_STATE_RELEASED;
+            } else {
+                data->point.x = tx; data->point.y = ty;
+                data->state   = LV_INDEV_STATE_PRESSED;
+            }
         } else {
             sw_down = false; sw_consumed = false;
             data->state = LV_INDEV_STATE_RELEASED;
