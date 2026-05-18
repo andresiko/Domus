@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v1.7 - graph 2 series + scroll + zoom"
+#define FW_VERSION "v1.9 - heatmap presencia + fix Te historial + autoescala Y"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
