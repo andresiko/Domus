@@ -1299,7 +1299,10 @@ static void build_scr_graph() {
 static void cb_open_heatmap(lv_event_t *e) { go_to(SCR_HEATMAP); }
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
-// Custom draw: grilla 24h × 7 días con colores de calor
+// Layout: 7 columnas (L-D) × 24 filas (06h→05h)
+// Grilla: 294×288px en (90, 62). CW=42, CH=12.
+// Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
+// Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
 static void hm_draw_event(lv_event_t *e) {
     lv_layer_t *layer = lv_event_get_layer(e);
     lv_obj_t   *obj   = (lv_obj_t*)lv_event_get_target(e);
@@ -1314,23 +1317,24 @@ static void hm_draw_event(lv_event_t *e) {
     dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
 
     lv_color_t c_lo = lv_color_hex(0x151515);
-    lv_color_t c_hi = lv_color_hex(0x0A9FFF); // naranja en pantalla
+    lv_color_t c_hi = lv_color_hex(0x0A9FFF);
 
-    const int CW = lv_obj_get_width(obj)  / 24;  // ~15px por hora
-    const int CH = lv_obj_get_height(obj) / 7;   // ~24px por día
+    const int CW = lv_obj_get_width(obj)  / 7;   // 42px por día
+    const int CH = lv_obj_get_height(obj) / 24;  // 12px por hora
 
-    for(int d=0;d<7;d++) {
-        for(int h=0;h<24;h++) {
-            // Sumar los 4 slots de 15min de esa hora
+    for(int c=0;c<7;c++) {
+        int wday = (c + 1) % 7; // L=1…V=5,S=6,D=0
+        for(int r=0;r<24;r++) {
+            int hour = (r + 6) % 24; // r=0→6am
             uint16_t sum=0;
-            for(int q=0;q<4;q++) sum += heatmap[d][h*4+q];
+            for(int q=0;q<4;q++) sum += heatmap[wday][hour*4+q];
             uint8_t avg = (uint8_t)(sum/4);
             uint8_t t   = maxv>0 ? (uint8_t)((uint16_t)avg*255/maxv) : 0;
             dsc.bg_color = lv_color_mix(c_hi, c_lo, t);
             lv_area_t a;
-            a.x1 = ca.x1 + h*CW;
+            a.x1 = ca.x1 + c*CW;
             a.x2 = a.x1 + CW - 1;
-            a.y1 = ca.y1 + d*CH;
+            a.y1 = ca.y1 + r*CH;
             a.y2 = a.y1 + CH - 1;
             lv_draw_rect(layer, &dsc, &a);
         }
@@ -1343,25 +1347,34 @@ static void build_scr_heatmap() {
     lv_obj_set_style_bg_opa(scr_heatmap, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_heatmap, LV_OBJ_FLAG_SCROLLABLE);
 
-    centered_label(scr_heatmap, "PRESENCIA", &lv_font_montserrat_20, COL_TEXT, -200);
+    centered_label(scr_heatmap, "PRESENCIA", &lv_font_montserrat_20, COL_TEXT, -220);
 
-    // Etiquetas días (izquierda)
+    // Etiquetas días: L M X J V S D — encima de cada columna
+    // Grid: 294×288px en (90, 62). CW=42.
     static const char *DAYS[7]={"L","M","X","J","V","S","D"};
-    // Grid: 360×168px, centrado en x=+12, y=-20
-    // Grid left abs = 240+12-180 = 72; con etiquetas día a x=52
-    for(int d=0;d<7;d++){
+    for(int c=0;c<7;c++){
         lv_obj_t *l=lv_label_create(scr_heatmap);
-        lv_label_set_text(l,DAYS[d]);
-        lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-        lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
-        // y: top del grid = 240-20-84 = 136; cada fila = 24px
-        lv_obj_set_pos(l, 50, 136 + d*24);
+        lv_label_set_text(l, DAYS[c]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+        lv_obj_set_pos(l, 90 + c*42 + 14, 44);
+    }
+
+    // Etiquetas horas: cada 3h a la izquierda de la grilla
+    // r=0→06h, r=3→09h, r=6→12h, r=9→15h, r=12→18h, r=15→21h, r=18→00h, r=21→03h
+    static const char *HLBLS[]={"06","09","12","15","18","21","00","03"};
+    for(int i=0;i<8;i++){
+        lv_obj_t *l=lv_label_create(scr_heatmap);
+        lv_label_set_text(l, HLBLS[i]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+        lv_obj_set_pos(l, 54, 62 + i*36);
     }
 
     // Objeto grilla (custom draw)
     lv_obj_t *grid = lv_obj_create(scr_heatmap);
-    lv_obj_set_size(grid, 360, 168);
-    lv_obj_set_pos(grid, 72, 136);
+    lv_obj_set_size(grid, 294, 288);
+    lv_obj_set_pos(grid, 90, 62);
     lv_obj_set_style_bg_color(grid, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(grid, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(grid, 0, 0);
@@ -1370,42 +1383,23 @@ static void build_scr_heatmap() {
     lv_obj_clear_flag(grid, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(grid, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
-    // Etiquetas hora (X: 00, 06, 12, 18, 23)
-    static const char *HLBLS[]={"00","06","12","18","23"};
-    static const int   HXOFF[]={0,  90, 180, 270,345};
-    for(int i=0;i<5;i++){
-        lv_obj_t *l=lv_label_create(scr_heatmap);
-        lv_label_set_text(l,HLBLS[i]);
-        lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-        lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
-        lv_obj_set_pos(l, 72+HXOFF[i], 310);
-    }
-
-    // Leyenda color (baja izquierda)
+    // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
-      lv_label_set_text(l,"menos");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
-      lv_obj_set_pos(l,60,330); }
-    // Gradiente leyenda: 5 bloques
+      lv_label_set_text(l,"- "); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,130,358); }
     for(int i=0;i<5;i++){
         lv_obj_t *b=lv_obj_create(scr_heatmap);
-        lv_obj_set_size(b,20,12);
-        lv_obj_set_pos(b,120+i*22,332);
-        lv_obj_set_style_border_width(b,0,0);
-        lv_obj_set_style_pad_all(b,0,0);
+        lv_obj_set_size(b,20,12); lv_obj_set_pos(b,148+i*22,361);
+        lv_obj_set_style_border_width(b,0,0); lv_obj_set_style_pad_all(b,0,0);
         lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE);
         uint8_t t=(uint8_t)(i*63);
-        lv_obj_set_style_bg_color(b,
-            lv_color_mix(lv_color_hex(0x0A9FFF),lv_color_hex(0x151515),t),0);
+        lv_obj_set_style_bg_color(b, lv_color_mix(lv_color_hex(0x0A9FFF),lv_color_hex(0x151515),t), 0);
     }
     { lv_obj_t *l=lv_label_create(scr_heatmap);
-      lv_label_set_text(l,"mas");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
-      lv_obj_set_pos(l,234,330); }
+      lv_label_set_text(l," +"); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,258,358); }
 
-    make_big_btn(scr_heatmap,"SALIR",COL_OFF,140,200,44,cb_heatmap_exit,nullptr);
+    make_big_btn(scr_heatmap,"SALIR",COL_OFF,168,200,40,cb_heatmap_exit,nullptr);
 }
 
 // ── VISOR LOG ────────────────────────────────────────────────
@@ -2347,6 +2341,8 @@ void loop() {
                     if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
                     if(dial_mode!=DIAL_NONE){
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
+                    } else if(cur_scr==SCR_PIN||cur_scr==SCR_CHANGE_PIN){
+                        memset(pin_buf,0,5); pin_len=0; go_to(SCR_TV);
                     } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_HIST_MENU||cur_scr==SCR_LOG){
                         go_to(SCR_TV);
                     } else if(cur_scr==SCR_TV){
