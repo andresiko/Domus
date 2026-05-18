@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.0 - menu historial + visor registro + fix swipe + fix PIN"
+#define FW_VERSION "v2.1 - fix heatmap freeze: celdas nativas LVGL"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -291,6 +291,7 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
+static lv_obj_t           *hm_cells[7][24] = {};
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_list      = nullptr;
@@ -1317,44 +1318,24 @@ static void build_scr_graph() {
 static void cb_open_heatmap(lv_event_t *e) { go_to(SCR_HEATMAP); }
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
-// Layout: 7 columnas (L-D) × 24 filas (06h→05h)
-// Grilla: 294×288px en (90, 62). CW=42, CH=12.
+// Actualiza colores de las 168 celdas nativas según heatmap[][]
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
 // Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
-static void hm_draw_event(lv_event_t *e) {
-    lv_layer_t *layer = lv_event_get_layer(e);
-    lv_obj_t   *obj   = (lv_obj_t*)lv_event_get_target(e);
-    lv_area_t   ca;
-    lv_obj_get_coords(obj, &ca);
-
+static void hm_update_cells() {
+    if(!hm_cells[0][0]) return;
     uint8_t maxv = 1;
     for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
-
-    lv_draw_rect_dsc_t dsc;
-    lv_draw_rect_dsc_init(&dsc);
-    dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
-
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
-
-    const int CW = lv_obj_get_width(obj)  / 7;   // 42px por día
-    const int CH = lv_obj_get_height(obj) / 24;  // 12px por hora
-
-    for(int c=0;c<7;c++) {
-        int wday = (c + 1) % 7; // L=1…V=5,S=6,D=0
-        for(int r=0;r<24;r++) {
-            int hour = (r + 6) % 24; // r=0→6am
+    for(int c=0;c<7;c++){
+        int wday=(c+1)%7;
+        for(int r=0;r<24;r++){
+            int hour=(r+6)%24;
             uint16_t sum=0;
-            for(int q=0;q<4;q++) sum += heatmap[wday][hour*4+q];
-            uint8_t avg = (uint8_t)(sum/4);
-            uint8_t t   = maxv>0 ? (uint8_t)((uint16_t)avg*255/maxv) : 0;
-            dsc.bg_color = lv_color_mix(c_hi, c_lo, t);
-            lv_area_t a;
-            a.x1 = ca.x1 + c*CW;
-            a.x2 = a.x1 + CW - 1;
-            a.y1 = ca.y1 + r*CH;
-            a.y2 = a.y1 + CH - 1;
-            lv_draw_rect(layer, &dsc, &a);
+            for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
+            uint8_t avg=(uint8_t)(sum/4);
+            uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
+            lv_obj_set_style_bg_color(hm_cells[c][r], lv_color_mix(c_hi,c_lo,t), 0);
         }
     }
 }
@@ -1389,17 +1370,23 @@ static void build_scr_heatmap() {
         lv_obj_set_pos(l, 54, 62 + i*36);
     }
 
-    // Objeto grilla (custom draw)
-    lv_obj_t *grid = lv_obj_create(scr_heatmap);
-    lv_obj_set_size(grid, 294, 288);
-    lv_obj_set_pos(grid, 90, 62);
-    lv_obj_set_style_bg_color(grid, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(grid, 0, 0);
-    lv_obj_set_style_pad_all(grid, 0, 0);
-    lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(grid, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(grid, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
+    // Grilla: 168 objetos nativos (7 cols × 24 filas), sin custom draw
+    const int CW=42, CH=12;
+    for(int c=0;c<7;c++){
+        for(int r=0;r<24;r++){
+            lv_obj_t *cell=lv_obj_create(scr_heatmap);
+            lv_obj_set_size(cell, CW, CH);
+            lv_obj_set_pos(cell, 90+c*CW, 62+r*CH);
+            lv_obj_set_style_radius(cell, 0, 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            hm_cells[c][r]=cell;
+        }
+    }
+    hm_update_cells();
 
     // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1999,8 +1986,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
-            // FADE_IN: solo una pantalla visible → evita renderizar hm_draw_event
-            // en múltiples frames de animación con la pantalla anterior
+            else hm_update_cells();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
