@@ -198,7 +198,11 @@ static bool   scr_change=false;
 // ── Swipe manual ─────────────────────────────────────────────
 static int16_t sw_sx = -1, sw_sy = -1, sw_lx = -1, sw_ly = -1;
 static bool    sw_down = false;
+static bool    sw_consumed = false;   // swipe ya detectado → ignorar release
 static int8_t  sw_dc = 0, sw_dr = 0;
+// Bloqueo post-swipe: impide clicks en tiles 350ms tras cualquier swipe
+static unsigned long swipe_block_until = 0;
+static inline bool swipe_blocked() { return millis() < swipe_block_until; }
 
 // ── Touch ────────────────────────────────────────────────────
 static uint8_t touch_i2c_addr = 0;
@@ -221,25 +225,30 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
         if (fingers > 0) {
             int16_t tx = ((xh&0x0F)<<8)|xl;
             int16_t ty = ((yh&0x0F)<<8)|yl;
-            data->point.x = tx; data->point.y = ty;
-            data->state   = LV_INDEV_STATE_PRESSED;
             last_touch_ms = millis();
             if (screen_dimmed) { set_brightness(cfg_brightness); screen_dimmed = false; }
-            if (!sw_down) { sw_sx = tx; sw_sy = ty; sw_down = true; }
+            if (!sw_down) { sw_sx=tx; sw_sy=ty; sw_down=true; sw_consumed=false; }
             sw_lx = tx; sw_ly = ty;
-        } else {
-            bool swipe_fired = false;
-            if (sw_down && cur_scr == SCR_TV) {
-                int dx = sw_lx - sw_sx, dy = sw_ly - sw_sy;
-                if (abs(dx) > abs(dy) && abs(dx) > 70)
-                    { sw_dc = (dx < 0) ? 1 : -1; swipe_fired = true; }
-                else if (abs(dy) > abs(dx) && abs(dy) > 70)
-                    { sw_dr = (dy < 0) ? 1 : -1; swipe_fired = true; }
+            // Detectar swipe durante el movimiento (threshold 30px)
+            // → cancelar act_obj ANTES de que LVGL procese el release
+            if (!sw_consumed && cur_scr == SCR_TV) {
+                int dx = tx - sw_sx, dy = ty - sw_sy;
+                if (abs(dx) > abs(dy) && abs(dx) > 30) {
+                    sw_dc = (dx < 0) ? 1 : -1;
+                    sw_consumed = true;
+                    swipe_block_until = millis() + 350;
+                    lv_indev_reset(indev, NULL); // cancela act_obj — no habrá click
+                } else if (abs(dy) > abs(dx) && abs(dy) > 30) {
+                    sw_dr = (dy < 0) ? 1 : -1;
+                    sw_consumed = true;
+                    swipe_block_until = millis() + 350;
+                    lv_indev_reset(indev, NULL);
+                }
             }
-            sw_down = false;
-            // Si fue swipe, desplazar el release fuera de pantalla para que
-            // LVGL no dispare LV_EVENT_CLICKED en el botón que estaba bajo el dedo
-            if (swipe_fired) { data->point.x = -1; data->point.y = -1; }
+            data->point.x = tx; data->point.y = ty;
+            data->state   = LV_INDEV_STATE_PRESSED;
+        } else {
+            sw_down = false; sw_consumed = false;
             data->state = LV_INDEV_STATE_RELEASED;
         }
     } else { while(Wire.available()) Wire.read(); data->state=LV_INDEV_STATE_RELEASED; }
@@ -736,8 +745,8 @@ static void check_heating_auto() {
 }
 
 // ── BUILD TILE HOME ──────────────────────────────────────────
-static void cb_alarm_badge(lv_event_t *e)   { tile_col=1; tile_row=0; lv_tileview_set_tile(tv, tile_alarm,    cfg_anim?LV_ANIM_ON:LV_ANIM_OFF); }
-static void cb_settings_icon(lv_event_t *e) { tile_col=1; tile_row=2; lv_tileview_set_tile(tv, tile_settings, cfg_anim?LV_ANIM_ON:LV_ANIM_OFF); }
+static void cb_alarm_badge(lv_event_t *e)   { if(swipe_blocked()) return; tile_col=1; tile_row=0; lv_tileview_set_tile(tv, tile_alarm,    cfg_anim?LV_ANIM_ON:LV_ANIM_OFF); }
+static void cb_settings_icon(lv_event_t *e) { if(swipe_blocked()) return; tile_col=1; tile_row=2; lv_tileview_set_tile(tv, tile_settings, cfg_anim?LV_ANIM_ON:LV_ANIM_OFF); }
 
 static void build_tile_home() {
     bg(tile_home);
@@ -874,12 +883,13 @@ static void build_tile_sensors() {
 }
 
 // ── BUILD TILE RELÉS ─────────────────────────────────────────
-static void cb_agua(lv_event_t *e)        { relay_set(1,!a6v3.output[1]); }
-static void cb_sirena(lv_event_t *e)      { relay_set(3,!a6v3.output[3]); }
-static void cb_hm_manual(lv_event_t *e)   { heat_set_mode(HM_MANUAL); }
-static void cb_hm_consigna(lv_event_t *e) { heat_set_mode(HM_CONSIGNA); }
+static void cb_agua(lv_event_t *e)        { if(swipe_blocked()) return; relay_set(1,!a6v3.output[1]); }
+static void cb_sirena(lv_event_t *e)      { if(swipe_blocked()) return; relay_set(3,!a6v3.output[3]); }
+static void cb_hm_manual(lv_event_t *e)   { if(swipe_blocked()) return; heat_set_mode(HM_MANUAL); }
+static void cb_hm_consigna(lv_event_t *e) { if(swipe_blocked()) return; heat_set_mode(HM_CONSIGNA); }
 static void cb_hm_prog(lv_event_t *e)     { /* Fase B */ }
 static void cb_setpoint_btn(lv_event_t *e) {
+    if(swipe_blocked()) return;
     if(heat_mode != HM_CONSIGNA) {
         heat_mode = HM_CONSIGNA;
         prefs.begin("domus",false); prefs.putInt("heat_mode",(int)heat_mode); prefs.end();
@@ -1020,6 +1030,7 @@ static void build_tile_relays() {
 
 // ── BUILD TILE ALARMA ────────────────────────────────────────
 static void cb_go_pin(lv_event_t *e) {
+    if(swipe_blocked()) return;
     pin_for_arm=(alarm_state==AS_OFF); memset(pin_buf,0,5); pin_len=0; go_to(SCR_PIN);
 }
 static void build_tile_alarm() {
@@ -1062,7 +1073,7 @@ static void cb_chpin_key(lv_event_t *e) {
     else if(d==-1){ if(chpin_len>0){chpin_len--;chpin_buf[chpin_len]=0;} update_chpin_dots(); }
     else if(chpin_len<4){ chpin_buf[chpin_len++]='0'+d; update_chpin_dots(); if(chpin_len==4) chpin_check(); }
 }
-static void cb_open_change_pin(lv_event_t *e){ go_to(SCR_CHANGE_PIN); }
+static void cb_open_change_pin(lv_event_t *e){ if(swipe_blocked()) return; go_to(SCR_CHANGE_PIN); }
 static void build_scr_change_pin() {
     scr_change_pin=lv_obj_create(nullptr); bg(scr_change_pin);
     lbl_chpin_title=centered_label(scr_change_pin,"PIN actual:",&lv_font_montserrat_20,COL_TEXT,-185);
@@ -1562,7 +1573,7 @@ static void build_scr_log() {
 
 // ── BUILD SCREEN HIST MENU ───────────────────────────────────
 
-static void cb_open_hist_menu(lv_event_t *e) { go_to(SCR_HIST_MENU); }
+static void cb_open_hist_menu(lv_event_t *e) { if(swipe_blocked()) return; go_to(SCR_HIST_MENU); }
 static void cb_hist_temp(lv_event_t *e)  { cb_open_graph(nullptr); }
 static void cb_hist_pres(lv_event_t *e)  { go_to(SCR_HEATMAP); }
 static void cb_hist_log(lv_event_t *e)   { log_day_off=0; go_to(SCR_LOG); }
@@ -1581,9 +1592,10 @@ static void build_scr_hist_menu() {
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
-static void cb_open_brightness(lv_event_t *e){ open_dial(DIAL_BRIGHTNESS); }
-static void cb_open_dim(lv_event_t *e)       { open_dial(DIAL_DIM); }
+static void cb_open_brightness(lv_event_t *e){ if(swipe_blocked()) return; open_dial(DIAL_BRIGHTNESS); }
+static void cb_open_dim(lv_event_t *e)       { if(swipe_blocked()) return; open_dial(DIAL_DIM); }
 static void cb_cycle_anim(lv_event_t *e) {
+    if(swipe_blocked()) return;
     cfg_anim = (cfg_anim + 1) % 2;
     if(lbl_cfg_anim)
         lv_label_set_text(lbl_cfg_anim, cfg_anim==0 ? "Anim: Ninguna" : "Anim: Deslizar");
