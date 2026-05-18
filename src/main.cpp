@@ -1975,14 +1975,15 @@ void setup() {
     lv_init();
 
     lv_display_t *disp=lv_display_create(TFT_WIDTH,TFT_HEIGHT);
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565); // forzar 2 bytes/pixel
     lv_display_set_flush_cb(disp,lvgl_flush_cb);
 
-    // Buffer: 10 filas en PSRAM (igual que v0.3 que funciona sin freeze)
-    size_t buf_sz=(size_t)TFT_WIDTH*10*sizeof(lv_color_t);
-    lv_color_t *buf1=(lv_color_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
-    if(!buf1) buf1=(lv_color_t*)malloc(buf_sz);
+    // 2 bytes/pixel explícito — LVGL 9.5 usa RGB888 por defecto si no se especifica
+    size_t buf_sz=(size_t)TFT_WIDTH*10*2;
+    uint8_t *buf1=(uint8_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
+    if(!buf1) buf1=(uint8_t*)malloc(buf_sz);
     lv_display_set_buffers(disp,buf1,nullptr,buf_sz,LV_DISPLAY_RENDER_MODE_PARTIAL);
-    Serial.printf("[MEM] Buffer LVGL: %u bytes\n", buf_sz);
+    Serial.printf("[MEM] Buffer LVGL: %u bytes (%u B/px)\n", buf_sz, (unsigned)(buf_sz/TFT_WIDTH/10));
 
     esp_timer_handle_t lt;
     esp_timer_create_args_t la={.callback=[](void*){lv_tick_inc(2);},.arg=nullptr,.name="lv"};
@@ -2006,22 +2007,24 @@ void setup() {
     tile_relays  =lv_tileview_add_tile(tv,2,1,LV_DIR_LEFT);
     tile_settings=lv_tileview_add_tile(tv,1,2,LV_DIR_TOP);
 
-    build_tile_home();
-    build_tile_sensors();
-    build_tile_relays();
-    build_tile_alarm();
-    build_tile_settings();
-    build_focus_lists();
-    build_scr_alarm();
-    build_scr_pin();
-    build_scr_change_pin();
-    build_scr_arming();
-    build_scr_dial();
-    build_scr_graph();
-    build_scr_heatmap();
+    Serial.println("[UI] build home...");   build_tile_home();
+    Serial.println("[UI] build sensors..."); build_tile_sensors();
+    Serial.println("[UI] build relays...");  build_tile_relays();
+    Serial.println("[UI] build alarm...");   build_tile_alarm();
+    Serial.println("[UI] build settings..."); build_tile_settings();
+    Serial.println("[UI] build focus...");   build_focus_lists();
+    Serial.println("[UI] build scr_alarm..."); build_scr_alarm();
+    Serial.println("[UI] build scr_pin...");   build_scr_pin();
+    Serial.println("[UI] build scr_chpin..."); build_scr_change_pin();
+    Serial.println("[UI] build scr_arming..."); build_scr_arming();
+    Serial.println("[UI] build scr_dial...");   build_scr_dial();
+    Serial.println("[UI] build scr_graph...");  build_scr_graph();
+    Serial.println("[UI] build scr_heatmap..."); build_scr_heatmap();
+    Serial.println("[UI] builds OK, loading screen...");
 
     lv_tileview_set_tile(tv,tile_home,LV_ANIM_OFF);
     lv_scr_load(tv);
+    Serial.println("[UI] rendering...");
     for(int i=0;i<20;i++){lv_timer_handler();delay(5);}
     Serial.println("Pantalla lista.");
 
