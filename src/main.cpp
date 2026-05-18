@@ -1998,17 +1998,19 @@ static void do_switch(Screen s) {
             lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
-            if(!scr_heatmap) build_scr_heatmap();
-            lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
+            // FADE_IN: solo una pantalla visible → evita renderizar hm_draw_event
+            // en múltiples frames de animación con la pantalla anterior
+            lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
-            if(!scr_hist_menu) build_scr_hist_menu();
-            lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            if(!scr_hist_menu){ esp_task_wdt_reset(); build_scr_hist_menu(); }
+            lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
             cur_scr=SCR_HIST_MENU; return;
         case SCR_LOG:
-            if(!scr_log) build_scr_log();
+            if(!scr_log){ esp_task_wdt_reset(); build_scr_log(); }
             log_update_date_label(); log_load();
-            lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
+            lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
             cur_scr=SCR_LOG; return;
     }
 }
