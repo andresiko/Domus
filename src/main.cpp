@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.4 - log sin lv_list: label unico + heatmap clip"
+#define FW_VERSION "v2.5 - LVGL en PSRAM + buffer 48 lineas doble"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -2192,11 +2192,12 @@ void setup() {
     lv_display_t *disp=lv_display_create(TFT_WIDTH,TFT_HEIGHT);
     lv_display_set_flush_cb(disp,lvgl_flush_cb);
 
-    size_t buf_sz=(size_t)TFT_WIDTH*10*sizeof(lv_color_t);
+    // Buffer 1/10 pantalla (48 líneas) × 2 — patrón Elecrow oficial, en PSRAM
+    size_t buf_sz=(size_t)TFT_WIDTH*(TFT_HEIGHT/10)*sizeof(lv_color_t);
     lv_color_t *buf1=(lv_color_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
-    if(!buf1) buf1=(lv_color_t*)malloc(buf_sz);
-    lv_display_set_buffers(disp,buf1,nullptr,buf_sz,LV_DISPLAY_RENDER_MODE_PARTIAL);
-    Serial.printf("[MEM] LVGL buf: %u bytes (sizeof lv_color_t=%u)\n", buf_sz, (unsigned)sizeof(lv_color_t));
+    lv_color_t *buf2=(lv_color_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
+    lv_display_set_buffers(disp,buf1,buf2,buf_sz,LV_DISPLAY_RENDER_MODE_PARTIAL);
+    Serial.printf("[MEM] LVGL buf: %u bytes x2 PSRAM (sizeof lv_color_t=%u)\n", buf_sz, (unsigned)sizeof(lv_color_t));
 
     esp_timer_handle_t lt;
     esp_timer_create_args_t la={.callback=[](void*){lv_tick_inc(2);},.arg=nullptr,.name="lv"};
