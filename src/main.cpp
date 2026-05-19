@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.5 - LVGL en PSRAM + buffer 48 lineas doble"
+#define FW_VERSION "v2.6 - fix heatmap crash + log layout"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -1332,7 +1332,6 @@ static void hm_draw_event(lv_event_t *e) {
 
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
-    const lv_area_t *clip = &layer->_clip_area;
     const int CW=42, CH=11; // 11px línea + 1px hueco = 12px paso
 
     lv_draw_rect_dsc_t dsc;
@@ -1342,7 +1341,6 @@ static void hm_draw_event(lv_event_t *e) {
     for(int r=0; r<24; r++) {
         lv_coord_t y1 = ca.y1 + r*12;
         lv_coord_t y2 = y1 + CH - 1;
-        if(y2 < clip->y1 || y1 > clip->y2) continue; // fila fuera del strip → saltar
         int hour = (r+6)%24;
         for(int c=0; c<7; c++) {
             int wday=(c+1)%7;
@@ -1511,61 +1509,43 @@ static void cb_log_nav(lv_event_t *e) {
 }
 static void cb_log_exit(lv_event_t *e) { go_to(SCR_TV); }
 
+static lv_obj_t* make_nav_btn(lv_obj_t *parent, const char *lbl, int delta, int x, int y) {
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_set_size(b, 68, 50);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_bg_color(b, lv_color_hex(COL_OFF), 0);
+    lv_obj_set_style_radius(b, 8, 0);
+    lv_obj_set_style_border_width(b, 0, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, cb_log_nav, LV_EVENT_CLICKED, (void*)(intptr_t)delta);
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, lbl);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
+    lv_obj_center(l);
+    return b;
+}
+
 static void build_scr_log() {
     scr_log = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr_log, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
 
-    centered_label(scr_log,"REGISTRO",&lv_font_montserrat_20,COL_TEXT,-210);
-    lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_14,COL_MUTED,-188);
+    // Botones izquierda: ir a días más ANTIGUOS (+delta)
+    make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7, 4, 140);
+    make_nav_btn(scr_log, LV_SYMBOL_UP "1d",  1, 4, 198);
 
-    // Contenedor scrollable (zona izquierda, 400×390px)
-    lv_obj_t *cont = lv_obj_create(scr_log);
-    lv_obj_set_pos(cont, 4, 34);
-    lv_obj_set_size(cont, 400, 390);
-    lv_obj_set_style_bg_color(cont, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(cont, 0, 0);
-    lv_obj_set_style_pad_all(cont, 4, 0);
+    // Botones derecha: ir a días más RECIENTES (-delta)
+    make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 408, 140);
+    make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 408, 198);
 
-    // Label único — log_load() escribe todo el texto aquí
-    log_label = lv_label_create(cont);
-    lv_obj_set_width(log_label, 388);
-    lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
-    lv_label_set_text(log_label, "");
-
-    // Botones navegación día/semana (columna derecha)
-    struct { const char *lbl; int delta; int y; } NAVBTNS[] = {
-        {LV_SYMBOL_UP "  7d",  7, 60},
-        {LV_SYMBOL_UP "  1d",  1,120},
-        {LV_SYMBOL_DOWN "  1d", -1,180},
-        {LV_SYMBOL_DOWN "  7d", -7,240},
-    };
-    for(auto &nb : NAVBTNS){
-        lv_obj_t *b = lv_obj_create(scr_log);
-        lv_obj_set_size(b, 68, 50);
-        lv_obj_set_pos(b, 406, nb.y);
-        lv_obj_set_style_bg_color(b, lv_color_hex(COL_OFF), 0);
-        lv_obj_set_style_radius(b, 8, 0);
-        lv_obj_set_style_border_width(b, 0, 0);
-        lv_obj_set_style_pad_all(b, 0, 0);
-        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(b, cb_log_nav, LV_EVENT_CLICKED, (void*)(intptr_t)nb.delta);
-        lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, nb.lbl);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
-        lv_obj_center(l);
-    }
-
-    // Botón SALIR
+    // Botón SALIR abajo centrado
     lv_obj_t *bsal = lv_obj_create(scr_log);
-    lv_obj_set_size(bsal, 68, 50);
-    lv_obj_set_pos(bsal, 406, 360);
+    lv_obj_set_size(bsal, 100, 46);
+    lv_obj_set_pos(bsal, 190, 416);
     lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(bsal, 8, 0);
     lv_obj_set_style_border_width(bsal, 0, 0);
@@ -1578,6 +1558,25 @@ static void build_scr_log() {
     lv_obj_set_style_text_font(lsal, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(lsal, lv_color_hex(COL_TEXT), 0);
     lv_obj_center(lsal);
+
+    // Contenedor scrollable centro — creado después de botones laterales
+    lv_obj_t *cont = lv_obj_create(scr_log);
+    lv_obj_set_pos(cont, 76, 50);
+    lv_obj_set_size(cont, 328, 356);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_style_pad_all(cont, 4, 0);
+
+    log_label = lv_label_create(cont);
+    lv_obj_set_width(log_label, 316);
+    lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
+    lv_label_set_text(log_label, "");
+
+    // Fecha — creada al final para renderizar encima del contenedor
+    lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_14,COL_MUTED,220-14);
 }
 
 // ── BUILD SCREEN HIST MENU ───────────────────────────────────
