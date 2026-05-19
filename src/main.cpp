@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.10 - fix guias draw callback + canvas RGB888"
+#define FW_VERSION "v2.11 - heatmap draw_main + log layout + fix crashes"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -291,8 +291,7 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
-static lv_obj_t           *hm_canvas     = nullptr;
-static uint8_t            *hm_canvas_buf = nullptr;
+static lv_obj_t           *hm_view       = nullptr;
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
@@ -1406,15 +1405,18 @@ static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
 // Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
-// Canvas: 294×288px, celda 40×11, paso 42×12
-static void hm_draw_canvas() {
-    if(!hm_canvas) return;
+// Draw callback: LVGL lo llama una vez por render strip — sin buffer PSRAM
+static void hm_draw_event(lv_event_t *e) {
+    lv_layer_t *layer = lv_event_get_layer(e);
+    if(!layer) return;
+    lv_obj_t *obj = (lv_obj_t*)lv_event_get_target(e);
+    lv_area_t area; lv_obj_get_coords(obj, &area);
+    int32_t cw = (area.x2 - area.x1) / 7;
+    int32_t ch = (area.y2 - area.y1) / 24;
     uint8_t maxv = 1;
     for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
-    lv_layer_t layer;
-    lv_canvas_init_layer(hm_canvas, &layer);
     lv_draw_rect_dsc_t dsc;
     lv_draw_rect_dsc_init(&dsc);
     dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
@@ -1427,11 +1429,10 @@ static void hm_draw_canvas() {
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
             dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
-            lv_area_t a = {c*42, r*12, c*42+39, r*12+10};
-            lv_draw_rect(&layer,&dsc,&a);
+            lv_area_t cell = {area.x1+c*cw, area.y1+r*ch, area.x1+c*cw+cw-1, area.y1+r*ch+ch-1};
+            lv_draw_rect(layer, &dsc, &cell);
         }
     }
-    lv_canvas_finish_layer(hm_canvas, &layer);
 }
 
 static void build_scr_heatmap() {
@@ -1464,20 +1465,14 @@ static void build_scr_heatmap() {
         lv_obj_set_pos(l, 54, 62 + i*36);
     }
 
-    // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
-    // Canvas único 294×288px en PSRAM — reemplaza 168 objetos nativos
-    const int HM_W=294, HM_H=288;
-    size_t buf_sz = (size_t)HM_W * HM_H * sizeof(lv_color_t) + 16;
-    hm_canvas_buf = (uint8_t*)heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM);
-    if(hm_canvas_buf){
-        memset(hm_canvas_buf, 0x15, buf_sz);
-        hm_canvas = lv_canvas_create(scr_heatmap);
-        lv_canvas_set_buffer(hm_canvas, hm_canvas_buf, HM_W, HM_H, LV_COLOR_FORMAT_RGB888);
-        lv_obj_set_pos(hm_canvas, 90, 62);
-        lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_CLICKABLE);
-        hm_draw_canvas();
-    }
+    // Grilla: objeto vacío con LV_EVENT_DRAW_MAIN — cero bytes PSRAM extra
+    hm_view = lv_obj_create(scr_heatmap);
+    lv_obj_remove_style_all(hm_view);
+    lv_obj_set_pos(hm_view, 90, 62);
+    lv_obj_set_size(hm_view, 294, 288);
+    lv_obj_clear_flag(hm_view, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(hm_view, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(hm_view, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
     // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1519,7 +1514,7 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
 
 static void log_load() {
     if(!log_label) return;
-    static char buf[6000];
+    static char buf[8000];
     buf[0] = '\0';
     int pos = 0;
 
@@ -1541,7 +1536,7 @@ static void log_load() {
 
     uint32_t added = 0;
     uint32_t head = hist_eh;
-    for(uint32_t i=0; i<count && added<40; i++){
+    for(uint32_t i=0; i<count && added<80; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
         EvtRec r;
@@ -1590,7 +1585,7 @@ static void cb_log_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 static lv_obj_t* make_nav_btn(lv_obj_t *parent, const char *lbl, int delta, int x, int y) {
     lv_obj_t *b = lv_obj_create(parent);
-    lv_obj_set_size(b, 90, 52);
+    lv_obj_set_size(b, 104, 72);
     lv_obj_set_pos(b, x, y);
     lv_obj_set_style_bg_color(b, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(b, 8, 0);
@@ -1613,18 +1608,18 @@ static void build_scr_log() {
     lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Botones izquierda 90px — ir a días más ANTIGUOS (+delta)
-    make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7,  2, 130);
-    make_nav_btn(scr_log, LV_SYMBOL_UP "1d",  1,  2, 192);
+    // Botones izquierda — 2 botones centrados verticalmente
+    make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7,  6, 154);
+    make_nav_btn(scr_log, LV_SYMBOL_UP "1d",  1,  6, 248);
 
-    // Botones derecha 90px — ir a días más RECIENTES (-delta)
-    make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 388, 130);
-    make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 388, 192);
+    // Botones derecha — 2 botones centrados verticalmente
+    make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 370, 154);
+    make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 370, 248);
 
     // Botón SALIR abajo centrado
     lv_obj_t *bsal = lv_obj_create(scr_log);
-    lv_obj_set_size(bsal, 100, 44);
-    lv_obj_set_pos(bsal, 190, 416);
+    lv_obj_set_size(bsal, 130, 50);
+    lv_obj_set_pos(bsal, 175, 415);
     lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(bsal, 8, 0);
     lv_obj_set_style_border_width(bsal, 0, 0);
@@ -1638,17 +1633,17 @@ static void build_scr_log() {
     lv_obj_set_style_text_color(lsal, lv_color_hex(COL_TEXT), 0);
     lv_obj_center(lsal);
 
-    // Contenedor scrollable centro (x=94, w=292) — creado después de botones laterales
+    // Contenedor scrollable centro — más estrecho para dar espacio a los botones
     log_cont = lv_obj_create(scr_log);
-    lv_obj_set_pos(log_cont, 94, 48);
-    lv_obj_set_size(log_cont, 292, 362);
+    lv_obj_set_pos(log_cont, 113, 48);
+    lv_obj_set_size(log_cont, 254, 362);
     lv_obj_set_style_bg_color(log_cont, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(log_cont, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(log_cont, 0, 0);
     lv_obj_set_style_pad_all(log_cont, 2, 0);
 
     log_label = lv_label_create(log_cont);
-    lv_obj_set_width(log_label, 284);
+    lv_obj_set_width(log_label, 246);
     lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
@@ -2048,7 +2043,7 @@ static void do_switch(Screen s) {
     switch(s){
         case SCR_TV:
             update_home(); update_sensors_tile(); update_relays_tile(); update_alarm_tile();
-            lv_scr_load_anim(tv,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
+            lv_scr_load_anim(tv,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             if(enc_mode==ENC_FOCUS) focus_idle_ms=millis(); // refresh timeout
             cur_scr=SCR_TV; return;
         case SCR_ALARM_CRIT:
@@ -2079,7 +2074,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ build_scr_heatmap(); }
-            else hm_draw_canvas();
+            else if(hm_view) lv_obj_invalidate(hm_view);
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
