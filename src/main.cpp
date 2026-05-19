@@ -458,6 +458,8 @@ static void hm_presence(bool on) {
     if (heatmap[d][s] < 255) heatmap[d][s]++;
 }
 
+static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux);
+
 static void hist_init() {
     if (!LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
         Serial.println("[HIST] LittleFS mount FAIL"); return;
@@ -476,6 +478,38 @@ static void hist_init() {
         if (f) { f.write((uint8_t*)heatmap, sizeof(heatmap)); f.close(); }
     }
     Serial.printf("[HIST] init  th=%lu  eh=%lu\n", hist_th, hist_eh);
+}
+
+static void serial_dump_events() {
+    File f = LittleFS.open("/evt.bin", "r");
+    if (!f) { Serial.println("[EVT] archivo no encontrado"); return; }
+    uint32_t total = f.size() / sizeof(EvtRec);
+    Serial.printf("[EVT] total registros en disco: %lu  head(eh)=%lu\n", total, hist_eh);
+    if (total == 0) { f.close(); return; }
+    uint32_t count = total < MAX_EVT ? total : MAX_EVT;
+    Serial.println("[EVT] idx  | timestamp           | tipo  val  aux | descripcion");
+    Serial.println("[EVT] -----+---------------------+----------------+------------");
+    uint32_t printed = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if ((i & 0x3F) == 0) esp_task_wdt_reset();
+        uint32_t idx = (hist_eh + MAX_EVT - 1 - i) % MAX_EVT;
+        EvtRec r;
+        f.seek(idx * sizeof(EvtRec));
+        if (f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
+        if (r.ts < 1000000000UL) continue;
+        time_t ts = (time_t)r.ts;
+        struct tm t; localtime_r(&ts, &t);
+        Serial.printf("[EVT] %5lu | %02d/%02d/%04d %02d:%02d:%02d | t=%-3u v=%-3u a=%-3u | %s\n",
+            idx,
+            t.tm_mday, t.tm_mon+1, t.tm_year+1900,
+            t.tm_hour, t.tm_min, t.tm_sec,
+            r.type, r.value, r.aux,
+            evt_name(r.type, r.value, r.aux));
+        printed++;
+        if (printed >= 500) { Serial.println("[EVT] ... (limitado a 500)"); break; }
+    }
+    f.close();
+    Serial.printf("[EVT] mostrados %lu de %lu\n", printed, count);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2246,6 +2280,7 @@ void setup() {
     Serial.printf("%s\n",now>1000000000L?" OK":" timeout");
 
     hist_init();
+    serial_dump_events();
     log_event(EVT_SYSTEM_BOOT, 1);
 
     last_touch_ms=millis();
