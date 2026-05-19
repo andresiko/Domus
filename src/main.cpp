@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.3 - heatmap clip-draw + log/hist ANIM_NONE"
+#define FW_VERSION "v2.4 - log sin lv_list: label unico + heatmap clip"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -294,7 +294,7 @@ static lv_obj_t           *scr_heatmap   = nullptr;
 static lv_obj_t           *hm_grid_obj   = nullptr; // único objeto de la grilla
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
-static lv_obj_t           *log_list      = nullptr;
+static lv_obj_t           *log_label     = nullptr;
 static uint32_t            log_day_off   = 0;
 static lv_obj_t           *chart_temp    = nullptr;
 static lv_chart_series_t  *ser_int_g     = nullptr;
@@ -1441,15 +1441,17 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
 }
 
 static void log_load() {
-    if(!log_list) return;
-    lv_obj_clean(log_list);
+    if(!log_label) return;
+    static char buf[2048];
+    buf[0] = '\0';
+    int pos = 0;
+
     File f = LittleFS.open("/evt.bin","r");
-    if(!f){ lv_list_add_text(log_list,"Sin registros"); return; }
+    if(!f){ lv_label_set_text(log_label,"Sin registros"); return; }
     uint32_t total = f.size() / sizeof(EvtRec);
-    if(total==0){ f.close(); lv_list_add_text(log_list,"Sin registros"); return; }
+    if(total==0){ f.close(); lv_label_set_text(log_label,"Sin registros"); return; }
     uint32_t count = total < MAX_EVT ? total : MAX_EVT;
 
-    // Calcular rango de fechas a mostrar según log_day_off
     time_t now = time(NULL);
     time_t day_start, day_end;
     {
@@ -1460,10 +1462,9 @@ static void log_load() {
         day_end   = day_start + 86400L;
     }
 
-    // Recorrer en orden inverso (más reciente primero)
     uint32_t added = 0;
-    uint32_t head = hist_eh; // apunta al siguiente a escribir = el más antiguo en buffer lleno
-    for(uint32_t i=0; i<count && added<50; i++){
+    uint32_t head = hist_eh;
+    for(uint32_t i=0; i<count && added<40; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + count - 1 - i) % MAX_EVT;
         EvtRec r;
@@ -1472,19 +1473,19 @@ static void log_load() {
         if(r.ts < 1000000000UL) continue;
         time_t ts = (time_t)r.ts;
         if(ts < day_start || ts >= day_end) {
-            if(ts < day_start) break; // más antiguo que el día, parar
+            if(ts < day_start) break;
             continue;
         }
         struct tm t; localtime_r(&ts, &t);
-        char line[48];
-        snprintf(line, sizeof(line), "%02d/%02d %02d:%02d  %s",
+        pos += snprintf(buf+pos, sizeof(buf)-pos-1, "%02d/%02d %02d:%02d  %s\n",
             t.tm_mday, t.tm_mon+1, t.tm_hour, t.tm_min,
             evt_name(r.type, r.value, r.aux));
-        lv_list_add_text(log_list, line);
+        if(pos >= (int)sizeof(buf)-50) break;
         added++;
     }
     f.close();
-    if(added==0) lv_list_add_text(log_list,"Sin eventos ese día");
+    if(added==0) lv_label_set_text(log_label,"Sin eventos ese día");
+    else         lv_label_set_text(log_label, buf);
 }
 
 static lv_obj_t *lbl_log_date = nullptr;
@@ -1516,28 +1517,27 @@ static void build_scr_log() {
     lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Título + fecha
     centered_label(scr_log,"REGISTRO",&lv_font_montserrat_20,COL_TEXT,-210);
     lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_14,COL_MUTED,-188);
 
-    // Lista scrollable (zona izquierda, deja 72px a la derecha para botones)
-    log_list = lv_list_create(scr_log);
-    lv_obj_set_pos(log_list, 4, 34);
-    lv_obj_set_size(log_list, 400, 390);
-    lv_obj_set_style_bg_color(log_list, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(log_list, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(log_list, 0, 0);
-    lv_obj_set_style_pad_all(log_list, 2, 0);
-    lv_obj_set_style_text_font(log_list, &lv_font_montserrat_14, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(log_list, lv_color_hex(COL_TEXT), LV_PART_ITEMS);
-    lv_obj_set_style_bg_color(log_list, lv_color_hex(COL_CARD), LV_PART_ITEMS);
-    lv_obj_set_style_bg_opa(log_list, LV_OPA_COVER, LV_PART_ITEMS);
-    lv_obj_set_style_pad_top(log_list, 4, LV_PART_ITEMS);
-    lv_obj_set_style_pad_bottom(log_list, 4, LV_PART_ITEMS);
-    lv_obj_set_style_pad_left(log_list, 6, LV_PART_ITEMS);
+    // Contenedor scrollable (zona izquierda, 400×390px)
+    lv_obj_t *cont = lv_obj_create(scr_log);
+    lv_obj_set_pos(cont, 4, 34);
+    lv_obj_set_size(cont, 400, 390);
+    lv_obj_set_style_bg_color(cont, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_style_pad_all(cont, 4, 0);
 
-    // Botones navegación (columna derecha)
-    // día +1 (arriba → más antiguo), día -1 (más reciente), semana +7, semana -7
+    // Label único — log_load() escribe todo el texto aquí
+    log_label = lv_label_create(cont);
+    lv_obj_set_width(log_label, 388);
+    lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
+    lv_label_set_text(log_label, "");
+
+    // Botones navegación día/semana (columna derecha)
     struct { const char *lbl; int delta; int y; } NAVBTNS[] = {
         {LV_SYMBOL_UP "  7d",  7, 60},
         {LV_SYMBOL_UP "  1d",  1,120},
@@ -1566,7 +1566,7 @@ static void build_scr_log() {
     lv_obj_t *bsal = lv_obj_create(scr_log);
     lv_obj_set_size(bsal, 68, 50);
     lv_obj_set_pos(bsal, 406, 360);
-    lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_RELAY_DIM), 0);
+    lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(bsal, 8, 0);
     lv_obj_set_style_border_width(bsal, 0, 0);
     lv_obj_set_style_pad_all(bsal, 0, 0);
