@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.6 - fix heatmap crash + log layout"
+#define FW_VERSION "v2.7 - fix log index + heatmap celdas nativas"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -291,7 +291,7 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
-static lv_obj_t           *hm_grid_obj   = nullptr; // único objeto de la grilla
+static lv_obj_t           *hm_cells[7][24] = {};    // [col/día][fila/hora]
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
@@ -1320,43 +1320,24 @@ static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
 // Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
-// Draw callback: sólo dibuja las filas que intersectan el clip strip actual
-static void hm_draw_event(lv_event_t *e) {
-    lv_layer_t *layer = lv_event_get_layer(e);
-    lv_obj_t   *obj   = (lv_obj_t*)lv_event_get_target(e);
-    lv_area_t   ca;
-    lv_obj_get_coords(obj, &ca);
-
+static void hm_update_cells() {
     uint8_t maxv = 1;
     for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
-
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
-    const int CW=42, CH=11; // 11px línea + 1px hueco = 12px paso
-
-    lv_draw_rect_dsc_t dsc;
-    lv_draw_rect_dsc_init(&dsc);
-    dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
-
     for(int r=0; r<24; r++) {
-        lv_coord_t y1 = ca.y1 + r*12;
-        lv_coord_t y2 = y1 + CH - 1;
         int hour = (r+6)%24;
         for(int c=0; c<7; c++) {
+            if(!hm_cells[c][r]) continue;
             int wday=(c+1)%7;
             uint16_t sum=0;
             for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
-            dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
-            lv_area_t a;
-            a.x1=ca.x1+c*CW; a.x2=a.x1+CW-2;
-            a.y1=y1; a.y2=y2;
-            lv_draw_rect(layer,&dsc,&a);
+            lv_obj_set_style_bg_color(hm_cells[c][r], lv_color_mix(c_hi,c_lo,t), 0);
         }
     }
 }
-static void hm_invalidate() { if(hm_grid_obj) lv_obj_invalidate(hm_grid_obj); }
 
 static void build_scr_heatmap() {
     scr_heatmap = lv_obj_create(nullptr);
@@ -1389,16 +1370,23 @@ static void build_scr_heatmap() {
     }
 
     // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
-    hm_grid_obj = lv_obj_create(scr_heatmap);
-    lv_obj_set_size(hm_grid_obj, 294, 288);
-    lv_obj_set_pos(hm_grid_obj, 90, 62);
-    lv_obj_set_style_bg_color(hm_grid_obj, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(hm_grid_obj, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(hm_grid_obj, 0, 0);
-    lv_obj_set_style_pad_all(hm_grid_obj, 0, 0);
-    lv_obj_clear_flag(hm_grid_obj, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(hm_grid_obj, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(hm_grid_obj, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
+    // 168 celdas nativas — CW=40×CH=11, paso 42×12, grid en (90,62)
+    for(int c=0; c<7; c++) {
+        for(int r=0; r<24; r++) {
+            lv_obj_t *cell = lv_obj_create(scr_heatmap);
+            lv_obj_set_size(cell, 40, 11);
+            lv_obj_set_pos(cell, 90 + c*42, 62 + r*12);
+            lv_obj_set_style_bg_color(cell, lv_color_hex(0x151515), 0);
+            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_set_style_radius(cell, 0, 0);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            hm_cells[c][r] = cell;
+        }
+    }
+    hm_update_cells();
 
     // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1464,7 +1452,7 @@ static void log_load() {
     uint32_t head = hist_eh;
     for(uint32_t i=0; i<count && added<40; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
-        uint32_t idx = (head + count - 1 - i) % MAX_EVT;
+        uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
         EvtRec r;
         f.seek(idx * sizeof(EvtRec));
         if(f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
@@ -2000,7 +1988,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ build_scr_heatmap(); }
-            else hm_invalidate();
+            else hm_update_cells();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
