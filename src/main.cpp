@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.7 - fix log index + heatmap celdas nativas"
+#define FW_VERSION "v2.8 - TZ España + log mejorado + heatmap WDT"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -295,6 +295,7 @@ static lv_obj_t           *hm_cells[7][24] = {};    // [col/día][fila/hora]
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
+static lv_obj_t           *log_cont      = nullptr;
 static uint32_t            log_day_off   = 0;
 static lv_obj_t           *chart_temp    = nullptr;
 static lv_chart_series_t  *ser_int_g     = nullptr;
@@ -1406,6 +1407,7 @@ static void build_scr_heatmap() {
     // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
     // 168 celdas nativas — CW=40×CH=11, paso 42×12, grid en (90,62)
     for(int c=0; c<7; c++) {
+        esp_task_wdt_reset();
         for(int r=0; r<24; r++) {
             lv_obj_t *cell = lv_obj_create(scr_heatmap);
             lv_obj_set_size(cell, 40, 11);
@@ -1462,7 +1464,7 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
 
 static void log_load() {
     if(!log_label) return;
-    static char buf[2048];
+    static char buf[6000];
     buf[0] = '\0';
     int pos = 0;
 
@@ -1484,7 +1486,7 @@ static void log_load() {
 
     uint32_t added = 0;
     uint32_t head = hist_eh;
-    for(uint32_t i=0; i<count && added<40; i++){
+    for(uint32_t i=0; i<count && added<100; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
         EvtRec r;
@@ -1493,14 +1495,14 @@ static void log_load() {
         if(r.ts < 1000000000UL) continue;
         time_t ts = (time_t)r.ts;
         if(ts < day_start || ts >= day_end) {
-            if(ts < day_start) break;
+            if(ts < day_start) continue; // no break: puede haber ts válidos más abajo
             continue;
         }
         struct tm t; localtime_r(&ts, &t);
         pos += snprintf(buf+pos, sizeof(buf)-pos-1, "%02d/%02d %02d:%02d  %s\n",
             t.tm_mday, t.tm_mon+1, t.tm_hour, t.tm_min,
             evt_name(r.type, r.value, r.aux));
-        if(pos >= (int)sizeof(buf)-50) break;
+        if(pos >= (int)sizeof(buf)-80) break;
         added++;
     }
     f.close();
@@ -1533,7 +1535,7 @@ static void cb_log_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 static lv_obj_t* make_nav_btn(lv_obj_t *parent, const char *lbl, int delta, int x, int y) {
     lv_obj_t *b = lv_obj_create(parent);
-    lv_obj_set_size(b, 68, 50);
+    lv_obj_set_size(b, 90, 52);
     lv_obj_set_pos(b, x, y);
     lv_obj_set_style_bg_color(b, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(b, 8, 0);
@@ -1544,7 +1546,7 @@ static lv_obj_t* make_nav_btn(lv_obj_t *parent, const char *lbl, int delta, int 
     lv_obj_add_event_cb(b, cb_log_nav, LV_EVENT_CLICKED, (void*)(intptr_t)delta);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, lbl);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(COL_TEXT), 0);
     lv_obj_center(l);
     return b;
@@ -1556,17 +1558,17 @@ static void build_scr_log() {
     lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Botones izquierda: ir a días más ANTIGUOS (+delta)
-    make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7, 4, 140);
-    make_nav_btn(scr_log, LV_SYMBOL_UP "1d",  1, 4, 198);
+    // Botones izquierda 90px — ir a días más ANTIGUOS (+delta)
+    make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7,  2, 130);
+    make_nav_btn(scr_log, LV_SYMBOL_UP "1d",  1,  2, 192);
 
-    // Botones derecha: ir a días más RECIENTES (-delta)
-    make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 408, 140);
-    make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 408, 198);
+    // Botones derecha 90px — ir a días más RECIENTES (-delta)
+    make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 388, 130);
+    make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 388, 192);
 
     // Botón SALIR abajo centrado
     lv_obj_t *bsal = lv_obj_create(scr_log);
-    lv_obj_set_size(bsal, 100, 46);
+    lv_obj_set_size(bsal, 100, 44);
     lv_obj_set_pos(bsal, 190, 416);
     lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_OFF), 0);
     lv_obj_set_style_radius(bsal, 8, 0);
@@ -1577,28 +1579,28 @@ static void build_scr_log() {
     lv_obj_add_event_cb(bsal, cb_log_exit, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *lsal = lv_label_create(bsal);
     lv_label_set_text(lsal, "SALIR");
-    lv_obj_set_style_text_font(lsal, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lsal, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(lsal, lv_color_hex(COL_TEXT), 0);
     lv_obj_center(lsal);
 
-    // Contenedor scrollable centro — creado después de botones laterales
-    lv_obj_t *cont = lv_obj_create(scr_log);
-    lv_obj_set_pos(cont, 76, 50);
-    lv_obj_set_size(cont, 328, 356);
-    lv_obj_set_style_bg_color(cont, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(cont, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(cont, 0, 0);
-    lv_obj_set_style_pad_all(cont, 4, 0);
+    // Contenedor scrollable centro (x=94, w=292) — creado después de botones laterales
+    log_cont = lv_obj_create(scr_log);
+    lv_obj_set_pos(log_cont, 94, 48);
+    lv_obj_set_size(log_cont, 292, 362);
+    lv_obj_set_style_bg_color(log_cont, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(log_cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(log_cont, 0, 0);
+    lv_obj_set_style_pad_all(log_cont, 2, 0);
 
-    log_label = lv_label_create(cont);
-    lv_obj_set_width(log_label, 316);
+    log_label = lv_label_create(log_cont);
+    lv_obj_set_width(log_label, 284);
     lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
     lv_label_set_text(log_label, "");
 
     // Fecha — creada al final para renderizar encima del contenedor
-    lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_14,COL_MUTED,220-14);
+    lbl_log_date = centered_label(scr_log,"Hoy",&lv_font_montserrat_20,COL_MUTED,220-14);
 }
 
 // ── BUILD SCREEN HIST MENU ───────────────────────────────────
@@ -2274,6 +2276,8 @@ void setup() {
     broker.init(1883);
 
     configTime(0,0,"pool.ntp.org","time.cloudflare.com");
+    setenv("TZ","CET-1CEST,M3.5.0,M10.5.0/3",1); // España: UTC+1 invierno, UTC+2 verano
+    tzset();
     Serial.print("NTP sync");
     time_t now=0;
     for(int i=0;i<40&&now<1000000000L;i++){delay(500);time(&now);Serial.print(".");}
@@ -2341,6 +2345,9 @@ void loop() {
                 graph_offset_samp=constrain(graph_offset_samp+steps,0,max_off);
                 graph_load();
             }
+        } else if(cur_scr==SCR_LOG && log_cont){
+            enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
+            if(steps!=0) lv_obj_scroll_by(log_cont, 0, steps*30, LV_ANIM_OFF);
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
