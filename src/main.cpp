@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.9 - heatmap canvas + graph zoom30d/guias/touch"
+#define FW_VERSION "v2.10 - fix guias draw callback + canvas RGB888"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -311,8 +311,6 @@ static int32_t             graph_ymax    = 40;
 static int32_t             graph_offset_samp = 0;   // muestras desplazadas hacia atrás
 static uint32_t            graph_zoom_h   = 24;     // horas visibles
 static uint32_t            graph_t0m=0, graph_t1m=0, graph_t2m=0; // epoch_min de los 3 puntos
-static lv_obj_t           *guide_lines[32] = {};
-static lv_point_precise_t  guide_pts[32][2] = {};
 static int32_t             chart_touch_prev_x = INT32_MIN;
 static lv_obj_t *lbl_chpin_title=nullptr, *lbl_chpin_dots=nullptr, *lbl_chpin_msg=nullptr;
 static char chpin_buf[5]={};
@@ -464,7 +462,6 @@ static void hm_presence(bool on) {
 }
 
 static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux);
-static void graph_update_guides();
 
 static void hist_init() {
     if (!LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
@@ -1245,12 +1242,34 @@ static void graph_load() {
     graph_update_ylabels();
     graph_update_xlabels();
     lv_chart_refresh(chart_temp);
-    graph_update_guides();
 }
 
 static void cb_graph_zoomin (lv_event_t *e){ if(graph_zoom_h>1){ graph_zoom_h=(graph_zoom_h<=2)?1:(graph_zoom_h/2); graph_load(); } }
 static void cb_graph_zoomout(lv_event_t *e){ if(graph_zoom_h<720){ graph_zoom_h=min(720u,graph_zoom_h*2); graph_load(); } }
 static void cb_graph_exit   (lv_event_t *e){ go_to(SCR_TV); }
+
+// Guías verticales dibujadas sobre el chart en cada render strip (sin objetos extra)
+static void chart_draw_guides(lv_event_t *e) {
+    lv_layer_t *layer = lv_event_get_layer(e);
+    if(!layer || graph_t0m==0 || graph_t2m==0 || graph_t2m<=graph_t0m) return;
+    lv_obj_t *obj = (lv_obj_t*)lv_event_get_target(e);
+    lv_area_t ca; lv_obj_get_coords(obj, &ca);
+    int32_t w = ca.x2 - ca.x1 - 8; // restar padding 4px a cada lado
+    int32_t x0 = ca.x1 + 4;
+    int32_t span = (int32_t)(graph_t2m - graph_t0m);
+    uint32_t interval = (graph_zoom_h < 48) ? 120u : 1440u;
+    uint32_t first = ((graph_t0m / interval) + 1) * interval;
+    lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+    ldsc.color = lv_color_hex(COL_MUTED);
+    ldsc.width = 1; ldsc.opa = LV_OPA_40;
+    for(uint32_t t = first; t < graph_t2m; t += interval) {
+        int32_t x = x0 + (int32_t)((int64_t)(t - graph_t0m) * w / span);
+        if(x <= ca.x1 || x >= ca.x2) continue;
+        ldsc.p1 = {(lv_value_precise_t)x, (lv_value_precise_t)(ca.y1+4)};
+        ldsc.p2 = {(lv_value_precise_t)x, (lv_value_precise_t)(ca.y2-4)};
+        lv_draw_line(layer, &ldsc);
+    }
+}
 
 // Touch scroll horizontal en la gráfica
 static void chart_touch_scroll(lv_event_t *e) {
@@ -1272,25 +1291,6 @@ static void chart_touch_scroll(lv_event_t *e) {
 }
 static void chart_touch_reset(lv_event_t *e) { chart_touch_prev_x = INT32_MIN; }
 
-// Guías verticales: se calculan en graph_load() y se colocan sobre la gráfica
-// Área chart: LV_ALIGN_CENTER offset(0,-18), size 360×230 → x∈[60,420] y∈[107,337], pad=4 → x∈[64,416]
-static const int32_t GUIDE_X1=64, GUIDE_X2=416, GUIDE_Y1=107, GUIDE_Y2=337;
-static void graph_update_guides() {
-    for(int i=0;i<32;i++) lv_obj_add_flag(guide_lines[i], LV_OBJ_FLAG_HIDDEN);
-    if(graph_t0m==0||graph_t2m==0||graph_t2m<=graph_t0m) return;
-    int32_t span=(int32_t)(graph_t2m-graph_t0m);
-    uint32_t interval=(graph_zoom_h<48)?120u:1440u; // <2d → 2h, >=2d → 1d
-    uint32_t first=((graph_t0m/interval)+1)*interval;
-    int gi=0;
-    for(uint32_t t=first; t<graph_t2m && gi<32; t+=interval, gi++){
-        int32_t x=GUIDE_X1+(int32_t)((int64_t)(t-graph_t0m)*(GUIDE_X2-GUIDE_X1)/span);
-        if(x<=GUIDE_X1||x>=GUIDE_X2){ gi--; continue; }
-        guide_pts[gi][0]={(lv_value_precise_t)x,(lv_value_precise_t)GUIDE_Y1};
-        guide_pts[gi][1]={(lv_value_precise_t)x,(lv_value_precise_t)GUIDE_Y2};
-        lv_line_set_points(guide_lines[gi], guide_pts[gi], 2);
-        lv_obj_clear_flag(guide_lines[gi], LV_OBJ_FLAG_HIDDEN);
-    }
-}
 
 static void cb_open_graph(lv_event_t *e) {
     graph_offset_samp=0; graph_zoom_h=24;
@@ -1397,15 +1397,7 @@ static void build_scr_graph() {
         lv_obj_center(l);
     }
 
-    // Guías verticales (creadas aquí, posicionadas en graph_update_guides)
-    for(int i=0;i<32;i++){
-        guide_lines[i]=lv_line_create(scr_graph);
-        lv_obj_set_style_line_color(guide_lines[i],lv_color_hex(COL_MUTED),0);
-        lv_obj_set_style_line_width(guide_lines[i],1,0);
-        lv_obj_set_style_line_opa(guide_lines[i],LV_OPA_40,0);
-        lv_obj_add_flag(guide_lines[i],LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(guide_lines[i],LV_OBJ_FLAG_CLICKABLE);
-    }
+    lv_obj_add_event_cb(chart_temp, chart_draw_guides, LV_EVENT_DRAW_MAIN_END, nullptr);
 }
 
 // ── BUILD SCREEN HEATMAP ─────────────────────────────────────
@@ -1475,12 +1467,12 @@ static void build_scr_heatmap() {
     // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
     // Canvas único 294×288px en PSRAM — reemplaza 168 objetos nativos
     const int HM_W=294, HM_H=288;
-    size_t buf_sz = (size_t)HM_W * HM_H * 2 + 4; // RGB565 + alineación
+    size_t buf_sz = (size_t)HM_W * HM_H * sizeof(lv_color_t) + 16;
     hm_canvas_buf = (uint8_t*)heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM);
     if(hm_canvas_buf){
         memset(hm_canvas_buf, 0x15, buf_sz);
         hm_canvas = lv_canvas_create(scr_heatmap);
-        lv_canvas_set_buffer(hm_canvas, hm_canvas_buf, HM_W, HM_H, LV_COLOR_FORMAT_RGB565);
+        lv_canvas_set_buffer(hm_canvas, hm_canvas_buf, HM_W, HM_H, LV_COLOR_FORMAT_RGB888);
         lv_obj_set_pos(hm_canvas, 90, 62);
         lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_CLICKABLE);
