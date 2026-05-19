@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.1 - fix heatmap freeze: celdas nativas LVGL"
+#define FW_VERSION "v2.2 - fix heatmap freeze: ANIM_NONE + wdt en build"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -1373,8 +1373,10 @@ static void build_scr_heatmap() {
     // Grilla: 168 objetos nativos (7 cols × 24 filas), sin custom draw
     const int CW=42, CH=12;
     for(int c=0;c<7;c++){
+        esp_task_wdt_reset();
         for(int r=0;r<24;r++){
             lv_obj_t *cell=lv_obj_create(scr_heatmap);
+            if(!cell) continue;
             lv_obj_set_size(cell, CW, CH);
             lv_obj_set_pos(cell, 90+c*CW, 62+r*CH);
             lv_obj_set_style_radius(cell, 0, 0);
@@ -1985,9 +1987,9 @@ static void do_switch(Screen s) {
             lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
-            if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
+            if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); esp_task_wdt_reset(); }
             else hm_update_cells();
-            lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
+            lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
             if(!scr_hist_menu){ esp_task_wdt_reset(); build_scr_hist_menu(); }
