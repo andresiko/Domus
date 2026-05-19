@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.8 - TZ España + log mejorado + heatmap WDT"
+#define FW_VERSION "v2.9 - heatmap canvas + graph zoom30d/guias/touch"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -291,7 +291,8 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
-static lv_obj_t           *hm_cells[7][24] = {};    // [col/día][fila/hora]
+static lv_obj_t           *hm_canvas     = nullptr;
+static uint8_t            *hm_canvas_buf = nullptr;
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
@@ -310,6 +311,9 @@ static int32_t             graph_ymax    = 40;
 static int32_t             graph_offset_samp = 0;   // muestras desplazadas hacia atrás
 static uint32_t            graph_zoom_h   = 24;     // horas visibles
 static uint32_t            graph_t0m=0, graph_t1m=0, graph_t2m=0; // epoch_min de los 3 puntos
+static lv_obj_t           *guide_lines[32] = {};
+static lv_point_precise_t  guide_pts[32][2] = {};
+static int32_t             chart_touch_prev_x = INT32_MIN;
 static lv_obj_t *lbl_chpin_title=nullptr, *lbl_chpin_dots=nullptr, *lbl_chpin_msg=nullptr;
 static char chpin_buf[5]={};
 static int  chpin_len=0, chpin_phase=0;
@@ -460,6 +464,7 @@ static void hm_presence(bool on) {
 }
 
 static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux);
+static void graph_update_guides();
 
 static void hist_init() {
     if (!LittleFS.begin(true, "/littlefs", 10, "littlefs")) {
@@ -1240,11 +1245,52 @@ static void graph_load() {
     graph_update_ylabels();
     graph_update_xlabels();
     lv_chart_refresh(chart_temp);
+    graph_update_guides();
 }
 
 static void cb_graph_zoomin (lv_event_t *e){ if(graph_zoom_h>1){ graph_zoom_h=(graph_zoom_h<=2)?1:(graph_zoom_h/2); graph_load(); } }
-static void cb_graph_zoomout(lv_event_t *e){ if(graph_zoom_h<168){ graph_zoom_h=min(168u,graph_zoom_h*2); graph_load(); } }
+static void cb_graph_zoomout(lv_event_t *e){ if(graph_zoom_h<720){ graph_zoom_h=min(720u,graph_zoom_h*2); graph_load(); } }
 static void cb_graph_exit   (lv_event_t *e){ go_to(SCR_TV); }
+
+// Touch scroll horizontal en la gráfica
+static void chart_touch_scroll(lv_event_t *e) {
+    lv_indev_t *indev = lv_indev_get_act();
+    if(!indev) return;
+    lv_point_t pos; lv_indev_get_point(indev, &pos);
+    if(chart_touch_prev_x != INT32_MIN) {
+        int32_t dx = pos.x - chart_touch_prev_x;
+        if(dx != 0) {
+            uint32_t win=graph_zoom_h*12;
+            uint32_t avail=(hist_th<MAX_TEMP)?hist_th:MAX_TEMP;
+            int32_t max_off=(avail>win)?(int32_t)(avail-win):0;
+            int32_t dsamp = -(int32_t)((int64_t)dx * win / 360);
+            graph_offset_samp=constrain(graph_offset_samp+dsamp, 0, max_off);
+            graph_load();
+        }
+    }
+    chart_touch_prev_x = pos.x;
+}
+static void chart_touch_reset(lv_event_t *e) { chart_touch_prev_x = INT32_MIN; }
+
+// Guías verticales: se calculan en graph_load() y se colocan sobre la gráfica
+// Área chart: LV_ALIGN_CENTER offset(0,-18), size 360×230 → x∈[60,420] y∈[107,337], pad=4 → x∈[64,416]
+static const int32_t GUIDE_X1=64, GUIDE_X2=416, GUIDE_Y1=107, GUIDE_Y2=337;
+static void graph_update_guides() {
+    for(int i=0;i<32;i++) lv_obj_add_flag(guide_lines[i], LV_OBJ_FLAG_HIDDEN);
+    if(graph_t0m==0||graph_t2m==0||graph_t2m<=graph_t0m) return;
+    int32_t span=(int32_t)(graph_t2m-graph_t0m);
+    uint32_t interval=(graph_zoom_h<48)?120u:1440u; // <2d → 2h, >=2d → 1d
+    uint32_t first=((graph_t0m/interval)+1)*interval;
+    int gi=0;
+    for(uint32_t t=first; t<graph_t2m && gi<32; t+=interval, gi++){
+        int32_t x=GUIDE_X1+(int32_t)((int64_t)(t-graph_t0m)*(GUIDE_X2-GUIDE_X1)/span);
+        if(x<=GUIDE_X1||x>=GUIDE_X2){ gi--; continue; }
+        guide_pts[gi][0]={(lv_value_precise_t)x,(lv_value_precise_t)GUIDE_Y1};
+        guide_pts[gi][1]={(lv_value_precise_t)x,(lv_value_precise_t)GUIDE_Y2};
+        lv_line_set_points(guide_lines[gi], guide_pts[gi], 2);
+        lv_obj_clear_flag(guide_lines[gi], LV_OBJ_FLAG_HIDDEN);
+    }
+}
 
 static void cb_open_graph(lv_event_t *e) {
     graph_offset_samp=0; graph_zoom_h=24;
@@ -1265,10 +1311,10 @@ static void build_scr_graph() {
         lv_obj_align(lbl_y[i],LV_ALIGN_CENTER,-190,-131+(int)(232*i/5));
     }
 
-    // Gráfica
+    // Gráfica (ligeramente más pequeña para dar más espacio a botones)
     chart_temp=lv_chart_create(scr_graph);
-    lv_obj_set_size(chart_temp,360,240);
-    lv_obj_align(chart_temp,LV_ALIGN_CENTER,0,-15);
+    lv_obj_set_size(chart_temp,360,230);
+    lv_obj_align(chart_temp,LV_ALIGN_CENTER,0,-18);
     lv_chart_set_type(chart_temp,LV_CHART_TYPE_LINE);
     lv_obj_set_style_bg_color(chart_temp,lv_color_hex(0x101018),0);
     lv_obj_set_style_bg_opa(chart_temp,LV_OPA_COVER,0);
@@ -1276,7 +1322,10 @@ static void build_scr_graph() {
     lv_obj_set_style_border_width(chart_temp,1,0);
     lv_obj_set_style_pad_all(chart_temp,4,LV_PART_MAIN);
     lv_obj_clear_flag(chart_temp,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(chart_temp,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(chart_temp,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(chart_temp, chart_touch_scroll, LV_EVENT_PRESSING, nullptr);
+    lv_obj_add_event_cb(chart_temp, chart_touch_reset,  LV_EVENT_RELEASED,  nullptr);
+    lv_obj_add_event_cb(chart_temp, chart_touch_reset,  LV_EVENT_PRESS_LOST,nullptr);
     lv_obj_set_style_line_color(chart_temp,lv_color_hex(0x202030),LV_PART_MAIN);
     lv_chart_set_range(chart_temp,LV_CHART_AXIS_PRIMARY_Y,graph_ymin,graph_ymax);
     lv_chart_set_div_line_count(chart_temp,5,5);
@@ -1321,21 +1370,21 @@ static void build_scr_graph() {
     lv_label_set_text(lbl_graph_zoom,"24h");
     lv_obj_set_style_text_font(lbl_graph_zoom,&lv_font_montserrat_14,0);
     lv_obj_set_style_text_color(lbl_graph_zoom,lv_color_hex(COL_MUTED),0);
-    lv_obj_align(lbl_graph_zoom,LV_ALIGN_CENTER,0,+138);
+    lv_obj_align(lbl_graph_zoom,LV_ALIGN_CENTER,0,+140);
 
-    // Botones inferiores: [−]  [SALIR]  [+]
+    // Botones: [−] izq  [SALIR] centro  [+] der — más grandes y separados
     struct BtnDef { const char *txt; int x; int w; lv_event_cb_t cb; uint32_t col; };
     BtnDef bdefs[]={
-        {"-",    -95, 60, cb_graph_zoomout, COL_CARD},
-        {"SALIR",  0,100, cb_graph_exit,    COL_OFF },
-        {"+",    +95, 60, cb_graph_zoomin,  COL_CARD},
+        {"-",    -122, 86, cb_graph_zoomout, COL_CARD},
+        {"SALIR",   0,110, cb_graph_exit,    COL_OFF },
+        {"+",    +122, 86, cb_graph_zoomin,  COL_CARD},
     };
     for(auto &d : bdefs){
         lv_obj_t *b=lv_obj_create(scr_graph);
-        lv_obj_set_size(b,d.w,38);
-        lv_obj_align(b,LV_ALIGN_CENTER,d.x,+165);
+        lv_obj_set_size(b,d.w,54);
+        lv_obj_align(b,LV_ALIGN_CENTER,d.x,+172);
         lv_obj_set_style_bg_color(b,lv_color_hex(d.col),0);
-        lv_obj_set_style_radius(b,19,0);
+        lv_obj_set_style_radius(b,10,0);
         lv_obj_set_style_border_width(b,0,0);
         lv_obj_set_style_pad_all(b,0,0);
         lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE);
@@ -1347,6 +1396,16 @@ static void build_scr_graph() {
         lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
         lv_obj_center(l);
     }
+
+    // Guías verticales (creadas aquí, posicionadas en graph_update_guides)
+    for(int i=0;i<32;i++){
+        guide_lines[i]=lv_line_create(scr_graph);
+        lv_obj_set_style_line_color(guide_lines[i],lv_color_hex(COL_MUTED),0);
+        lv_obj_set_style_line_width(guide_lines[i],1,0);
+        lv_obj_set_style_line_opa(guide_lines[i],LV_OPA_40,0);
+        lv_obj_add_flag(guide_lines[i],LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(guide_lines[i],LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 
 // ── BUILD SCREEN HEATMAP ─────────────────────────────────────
@@ -1355,23 +1414,32 @@ static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
 // Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
-static void hm_update_cells() {
+// Canvas: 294×288px, celda 40×11, paso 42×12
+static void hm_draw_canvas() {
+    if(!hm_canvas) return;
     uint8_t maxv = 1;
     for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
+    lv_layer_t layer;
+    lv_canvas_init_layer(hm_canvas, &layer);
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
     for(int r=0; r<24; r++) {
         int hour = (r+6)%24;
         for(int c=0; c<7; c++) {
-            if(!hm_cells[c][r]) continue;
             int wday=(c+1)%7;
             uint16_t sum=0;
             for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
-            lv_obj_set_style_bg_color(hm_cells[c][r], lv_color_mix(c_hi,c_lo,t), 0);
+            dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
+            lv_area_t a = {c*42, r*12, c*42+39, r*12+10};
+            lv_draw_rect(&layer,&dsc,&a);
         }
     }
+    lv_canvas_finish_layer(hm_canvas, &layer);
 }
 
 static void build_scr_heatmap() {
@@ -1405,24 +1473,19 @@ static void build_scr_heatmap() {
     }
 
     // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
-    // 168 celdas nativas — CW=40×CH=11, paso 42×12, grid en (90,62)
-    for(int c=0; c<7; c++) {
-        esp_task_wdt_reset();
-        for(int r=0; r<24; r++) {
-            lv_obj_t *cell = lv_obj_create(scr_heatmap);
-            lv_obj_set_size(cell, 40, 11);
-            lv_obj_set_pos(cell, 90 + c*42, 62 + r*12);
-            lv_obj_set_style_bg_color(cell, lv_color_hex(0x151515), 0);
-            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_width(cell, 0, 0);
-            lv_obj_set_style_pad_all(cell, 0, 0);
-            lv_obj_set_style_radius(cell, 0, 0);
-            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-            hm_cells[c][r] = cell;
-        }
+    // Canvas único 294×288px en PSRAM — reemplaza 168 objetos nativos
+    const int HM_W=294, HM_H=288;
+    size_t buf_sz = (size_t)HM_W * HM_H * 2 + 4; // RGB565 + alineación
+    hm_canvas_buf = (uint8_t*)heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM);
+    if(hm_canvas_buf){
+        memset(hm_canvas_buf, 0x15, buf_sz);
+        hm_canvas = lv_canvas_create(scr_heatmap);
+        lv_canvas_set_buffer(hm_canvas, hm_canvas_buf, HM_W, HM_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(hm_canvas, 90, 62);
+        lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(hm_canvas, LV_OBJ_FLAG_CLICKABLE);
+        hm_draw_canvas();
     }
-    hm_update_cells();
 
     // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1486,7 +1549,7 @@ static void log_load() {
 
     uint32_t added = 0;
     uint32_t head = hist_eh;
-    for(uint32_t i=0; i<count && added<100; i++){
+    for(uint32_t i=0; i<count && added<40; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
         EvtRec r;
@@ -1495,7 +1558,7 @@ static void log_load() {
         if(r.ts < 1000000000UL) continue;
         time_t ts = (time_t)r.ts;
         if(ts < day_start || ts >= day_end) {
-            if(ts < day_start) continue; // no break: puede haber ts válidos más abajo
+            if(ts < day_start) break;
             continue;
         }
         struct tm t; localtime_r(&ts, &t);
@@ -1595,7 +1658,7 @@ static void build_scr_log() {
     log_label = lv_label_create(log_cont);
     lv_obj_set_width(log_label, 284);
     lv_label_set_long_mode(log_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(log_label, lv_color_hex(COL_TEXT), 0);
     lv_label_set_text(log_label, "");
 
@@ -1617,10 +1680,10 @@ static void build_scr_hist_menu() {
     lv_obj_set_style_bg_opa(scr_hist_menu, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_hist_menu, LV_OBJ_FLAG_SCROLLABLE);
     centered_label(scr_hist_menu,"HISTORIAL",&lv_font_montserrat_20,COL_TEXT,-180);
-    make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -60,280,56,cb_hist_temp,nullptr);
-    make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,280,56,cb_hist_pres,nullptr);
-    make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   76,280,56,cb_hist_log, nullptr);
-    make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        160,280,48,cb_hist_exit,nullptr);
+    make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -72,300,68,cb_hist_temp,nullptr);
+    make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,300,68,cb_hist_pres,nullptr);
+    make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   88,300,68,cb_hist_log, nullptr);
+    make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        170,280,52,cb_hist_exit,nullptr);
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
@@ -2024,7 +2087,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ build_scr_heatmap(); }
-            else hm_update_cells();
+            else hm_draw_canvas();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
@@ -2342,7 +2405,9 @@ void loop() {
                 uint32_t avail=(hist_th<MAX_TEMP)?hist_th:MAX_TEMP;
                 uint32_t win=graph_zoom_h*12;
                 int32_t max_off=(avail>win)?(int32_t)(avail-win):0;
-                graph_offset_samp=constrain(graph_offset_samp+steps,0,max_off);
+                // Velocidad escala con zoom: mín 6 muestras (30min), máx win/20 (5% ventana)
+                int32_t mult=(int32_t)max(6u, win/20u);
+                graph_offset_samp=constrain(graph_offset_samp+steps*mult,0,max_off);
                 graph_load();
             }
         } else if(cur_scr==SCR_LOG && log_cont){

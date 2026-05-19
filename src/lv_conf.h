@@ -23,6 +23,7 @@
 #define LV_USE_KEYBOARD 1
 #define LV_USE_TILEVIEW 1
 #define LV_USE_SWITCH   1
+#define LV_USE_CANVAS   1
 
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_20 1
