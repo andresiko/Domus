@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.2 - fix heatmap freeze: ANIM_NONE + wdt en build"
+#define FW_VERSION "v2.3 - heatmap clip-draw + log/hist ANIM_NONE"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -291,7 +291,7 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
-static lv_obj_t           *hm_cells[7][24] = {};
+static lv_obj_t           *hm_grid_obj   = nullptr; // único objeto de la grilla
 static lv_obj_t           *scr_hist_menu = nullptr;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_list      = nullptr;
@@ -1318,27 +1318,47 @@ static void build_scr_graph() {
 static void cb_open_heatmap(lv_event_t *e) { go_to(SCR_HEATMAP); }
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
-// Actualiza colores de las 168 celdas nativas según heatmap[][]
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
 // Fila r → hora (r+6)%24 [r=0→6am … r=17→23h … r=23→5am]
-static void hm_update_cells() {
-    if(!hm_cells[0][0]) return;
+// Draw callback: sólo dibuja las filas que intersectan el clip strip actual
+static void hm_draw_event(lv_event_t *e) {
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_obj_t   *obj   = (lv_obj_t*)lv_event_get_target(e);
+    lv_area_t   ca;
+    lv_obj_get_coords(obj, &ca);
+
     uint8_t maxv = 1;
     for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
+
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
-    for(int c=0;c<7;c++){
-        int wday=(c+1)%7;
-        for(int r=0;r<24;r++){
-            int hour=(r+6)%24;
+    const lv_area_t *clip = &layer->_clip_area;
+    const int CW=42, CH=11; // 11px línea + 1px hueco = 12px paso
+
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
+
+    for(int r=0; r<24; r++) {
+        lv_coord_t y1 = ca.y1 + r*12;
+        lv_coord_t y2 = y1 + CH - 1;
+        if(y2 < clip->y1 || y1 > clip->y2) continue; // fila fuera del strip → saltar
+        int hour = (r+6)%24;
+        for(int c=0; c<7; c++) {
+            int wday=(c+1)%7;
             uint16_t sum=0;
             for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
-            lv_obj_set_style_bg_color(hm_cells[c][r], lv_color_mix(c_hi,c_lo,t), 0);
+            dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
+            lv_area_t a;
+            a.x1=ca.x1+c*CW; a.x2=a.x1+CW-2;
+            a.y1=y1; a.y2=y2;
+            lv_draw_rect(layer,&dsc,&a);
         }
     }
 }
+static void hm_invalidate() { if(hm_grid_obj) lv_obj_invalidate(hm_grid_obj); }
 
 static void build_scr_heatmap() {
     scr_heatmap = lv_obj_create(nullptr);
@@ -1370,25 +1390,17 @@ static void build_scr_heatmap() {
         lv_obj_set_pos(l, 54, 62 + i*36);
     }
 
-    // Grilla: 168 objetos nativos (7 cols × 24 filas), sin custom draw
-    const int CW=42, CH=12;
-    for(int c=0;c<7;c++){
-        esp_task_wdt_reset();
-        for(int r=0;r<24;r++){
-            lv_obj_t *cell=lv_obj_create(scr_heatmap);
-            if(!cell) continue;
-            lv_obj_set_size(cell, CW, CH);
-            lv_obj_set_pos(cell, 90+c*CW, 62+r*CH);
-            lv_obj_set_style_radius(cell, 0, 0);
-            lv_obj_set_style_border_width(cell, 0, 0);
-            lv_obj_set_style_pad_all(cell, 0, 0);
-            lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
-            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-            hm_cells[c][r]=cell;
-        }
-    }
-    hm_update_cells();
+    // Grilla: UN único objeto con custom draw (clip-aware, ~7 rects por strip)
+    hm_grid_obj = lv_obj_create(scr_heatmap);
+    lv_obj_set_size(hm_grid_obj, 294, 288);
+    lv_obj_set_pos(hm_grid_obj, 90, 62);
+    lv_obj_set_style_bg_color(hm_grid_obj, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(hm_grid_obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(hm_grid_obj, 0, 0);
+    lv_obj_set_style_pad_all(hm_grid_obj, 0, 0);
+    lv_obj_clear_flag(hm_grid_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(hm_grid_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(hm_grid_obj, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
     // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1451,7 +1463,8 @@ static void log_load() {
     // Recorrer en orden inverso (más reciente primero)
     uint32_t added = 0;
     uint32_t head = hist_eh; // apunta al siguiente a escribir = el más antiguo en buffer lleno
-    for(uint32_t i=0; i<count && added<200; i++){
+    for(uint32_t i=0; i<count && added<50; i++){
+        if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + count - 1 - i) % MAX_EVT;
         EvtRec r;
         f.seek(idx * sizeof(EvtRec));
@@ -1634,7 +1647,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_RELAY_DIM,+146,260,46,cb_open_hist_menu,nullptr);
+    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_OFF,+146,260,46,cb_open_hist_menu,nullptr);
 
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
@@ -1987,18 +2000,18 @@ static void do_switch(Screen s) {
             lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
-            if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); esp_task_wdt_reset(); }
-            else hm_update_cells();
+            if(!scr_heatmap){ build_scr_heatmap(); }
+            else hm_invalidate();
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
-            if(!scr_hist_menu){ esp_task_wdt_reset(); build_scr_hist_menu(); }
-            lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
+            if(!scr_hist_menu){ build_scr_hist_menu(); }
+            lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HIST_MENU; return;
         case SCR_LOG:
-            if(!scr_log){ esp_task_wdt_reset(); build_scr_log(); }
+            if(!scr_log){ build_scr_log(); }
             log_update_date_label(); log_load();
-            lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_FADE_IN,200,0,false);
+            lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_LOG; return;
     }
 }
