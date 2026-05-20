@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.17"
+#define FW_VERSION "v2.18"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -339,7 +339,8 @@ static lv_obj_t *lbl_heat_active = nullptr;
 
 // Settings tile buttons (saved for encoder focus navigation)
 static lv_obj_t *btn_settings_br=nullptr, *btn_settings_dim=nullptr;
-static lv_obj_t *btn_settings_pin=nullptr, *btn_settings_anim=nullptr, *btn_settings_hist=nullptr;
+static lv_obj_t *btn_settings_pin=nullptr, *btn_settings_anim=nullptr;
+static lv_obj_t *lbl_settings_mem=nullptr;
 
 // Home-hint labels per tile (saved for encoder focus HOME-nav)
 static lv_obj_t *hint_sensors=nullptr, *hint_relays=nullptr;
@@ -407,6 +408,8 @@ static uint32_t hist_eh = 0; // write head events
 
 static uint8_t       heatmap[7][96] = {}; // presencia: conteo por franja 15min × día semana
 static unsigned long hm_save_ts     = 0;
+static int8_t        hm_week_off    = 0;  // 0=semana actual, -1=anterior, etc.
+static lv_obj_t     *lbl_hm_week    = nullptr;
 
 // Estado previo para detección de cambios y logging
 static bool hp_input[7]  = {};
@@ -1365,6 +1368,32 @@ static void build_scr_graph() {
 }
 
 // ── BUILD SCREEN HEATMAP ─────────────────────────────────────
+static void hm_update_week_label() {
+    if(!lbl_hm_week) return;
+    time_t now = time(NULL);
+    if(now < 1000000000L){ lv_label_set_text(lbl_hm_week,"Sin hora NTP"); return; }
+    struct tm t; localtime_r(&now, &t);
+    t.tm_hour=0; t.tm_min=0; t.tm_sec=0;
+    int wday = t.tm_wday==0 ? 6 : t.tm_wday-1; // Mon=0...Sun=6
+    time_t monday = mktime(&t) - (time_t)wday*86400L + (time_t)hm_week_off*7L*86400L;
+    time_t sunday = monday + 6L*86400L;
+    struct tm m, s; localtime_r(&monday,&m); localtime_r(&sunday,&s);
+    char buf[22];
+    snprintf(buf,sizeof(buf),"%02d/%02d — %02d/%02d/%04d",
+        m.tm_mday,m.tm_mon+1, s.tm_mday,s.tm_mon+1,s.tm_year+1900);
+    lv_label_set_text(lbl_hm_week, buf);
+}
+static void cb_hm_week_prev(lv_event_t *e) {
+    hm_week_off--;
+    hm_update_week_label();
+    if(hm_view) lv_obj_invalidate(hm_view);
+}
+static void cb_hm_week_next(lv_event_t *e) {
+    if(hm_week_off >= 0) return;
+    hm_week_off++;
+    hm_update_week_label();
+    if(hm_view) lv_obj_invalidate(hm_view);
+}
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
@@ -1378,7 +1407,8 @@ static void hm_draw_event(lv_event_t *e) {
     int32_t cw = (area.x2 - area.x1) / 7;
     int32_t ch = (area.y2 - area.y1) / 24;
     uint8_t maxv = 1;
-    for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
+    if(hm_week_off==0)
+        for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0A9FFF);
     lv_draw_rect_dsc_t dsc;
@@ -1389,7 +1419,7 @@ static void hm_draw_event(lv_event_t *e) {
         for(int c=0; c<7; c++) {
             int wday=(c+1)%7;
             uint16_t sum=0;
-            for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
+            if(hm_week_off==0) for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
             dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
@@ -1433,7 +1463,32 @@ static void build_scr_heatmap() {
     lv_obj_clear_flag(hm_view, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hm_view, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
-    make_big_btn(scr_heatmap, "SALIR", COL_OFF, 180, 280, 68, cb_heatmap_exit, nullptr);
+    // Navegación semanas — derecha, alineados con grid (y=135 y y=215 absolutos)
+    { lv_obj_t *b=lv_obj_create(scr_heatmap);
+      lv_obj_set_size(b,70,58); lv_obj_set_pos(b,397,120);
+      lv_obj_set_style_bg_color(b,lv_color_hex(COL_OFF),0);
+      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
+      lv_obj_set_style_pad_all(b,0,0);
+      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(b,cb_hm_week_prev,LV_EVENT_CLICKED,nullptr);
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,LV_SYMBOL_LEFT "\nSem");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
+    { lv_obj_t *b=lv_obj_create(scr_heatmap);
+      lv_obj_set_size(b,70,58); lv_obj_set_pos(b,397,210);
+      lv_obj_set_style_bg_color(b,lv_color_hex(COL_OFF),0);
+      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
+      lv_obj_set_style_pad_all(b,0,0);
+      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(b,cb_hm_week_next,LV_EVENT_CLICKED,nullptr);
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"Sem\n" LV_SYMBOL_RIGHT);
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
+
+    // Etiqueta semana — entre grid y SALIR
+    lbl_hm_week = centered_label(scr_heatmap,"...", &lv_font_montserrat_14, COL_MUTED, 128);
+
+    make_big_btn(scr_heatmap, "SALIR", COL_OFF, 190, 280, 60, cb_heatmap_exit, nullptr);
 }
 
 // ── VISOR LOG ────────────────────────────────────────────────
@@ -1689,7 +1744,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    btn_settings_hist=make_big_btn(tile_settings,"Historial",COL_OFF,+146,260,46,cb_open_hist_menu,nullptr);
+    lbl_settings_mem=centered_label(tile_settings,"Flash: ...", &lv_font_montserrat_14, COL_MUTED, +146);
 
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
@@ -1874,11 +1929,10 @@ static void build_focus_lists(){
       f.items[3]=btn_setpoint; f.items[4]=btn_sirena_r;
       f.items[5]=hint_relays;  f.home_nav[5]=true; }
     // 2 = settings tile
-    { FocusList &f=tile_focus[2]; f.count=6;
+    { FocusList &f=tile_focus[2]; f.count=5;
       f.items[0]=btn_settings_br; f.items[1]=btn_settings_dim;
       f.items[2]=btn_settings_pin; f.items[3]=btn_settings_anim;
-      f.items[4]=btn_settings_hist;
-      f.items[5]=hint_settings; f.home_nav[5]=true; }
+      f.items[4]=hint_settings; f.home_nav[4]=true; }
     // 3 = hist tile
     { FocusList &f=tile_focus[3]; f.count=4;
       f.items[0]=btn_hist[0];  f.home_nav[0]=false;
@@ -2011,6 +2065,12 @@ static void do_switch(Screen s) {
         case SCR_TV:
             update_home();
             update_sensors_tile();
+            if(lbl_settings_mem){
+                size_t fu=LittleFS.usedBytes(), ft=LittleFS.totalBytes();
+                char mb[36]; snprintf(mb,sizeof(mb),"Flash: %d/%d KB (%d%%)",
+                    (int)(fu/1024),(int)(ft/1024),ft>0?(int)(fu*100/ft):0);
+                lv_label_set_text(lbl_settings_mem,mb);
+            }
             update_relays_tile();
             update_alarm_tile();
             lv_scr_load_anim(tv,LV_SCR_LOAD_ANIM_NONE,0,0,false);
@@ -2045,7 +2105,9 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
-            else if(hm_view) lv_obj_invalidate(hm_view);
+            hm_week_off=0;
+            hm_update_week_label();
+            if(hm_view) lv_obj_invalidate(hm_view);
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
@@ -2204,7 +2266,6 @@ static void exec_focus_item() {
     else if(w==btn_settings_dim)  cb_open_dim(nullptr);
     else if(w==btn_settings_pin)  cb_open_change_pin(nullptr);
     else if(w==btn_settings_anim) cb_cycle_anim(nullptr);
-    else if(w==btn_settings_hist) cb_open_hist_menu(nullptr);
     else if(w==btn_hist[0])       cb_hist_temp(nullptr);
     else if(w==btn_hist[1])       cb_hist_pres(nullptr);
     else if(w==btn_hist[2])       cb_hist_log(nullptr);
