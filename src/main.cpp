@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.13"
+#define FW_VERSION "v2.14"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -275,8 +275,8 @@ static lv_obj_t *lbl_wx_forecast = nullptr;
 static lv_obj_t *sdot[5];
 
 // Relés
-static lv_obj_t *btn_agua_r=nullptr,   *lbl_agua_r=nullptr;
-static lv_obj_t *btn_sirena_r=nullptr, *lbl_sirena_r=nullptr;
+static lv_obj_t *btn_agua_r=nullptr;
+static lv_obj_t *btn_sirena_r=nullptr;
 static lv_obj_t *btn_hm[3]={};
 static lv_obj_t *btn_setpoint=nullptr, *lbl_setpoint=nullptr;
 
@@ -606,7 +606,6 @@ static void bg(lv_obj_t *o) {
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
 }
-
 
 
 static lv_obj_t *add_home_hint(lv_obj_t *tile, lv_align_t align, const char *txt) {
@@ -954,21 +953,7 @@ static void refresh_heat_ui() {
 static void build_tile_relays() {
     bg(tile_relays);
 
-    btn_agua_r=lv_obj_create(tile_relays);
-    lv_obj_set_size(btn_agua_r,260,65);
-    lv_obj_align(btn_agua_r,LV_ALIGN_CENTER,0,-140);
-    lv_obj_set_style_bg_color(btn_agua_r,lv_color_hex(COL_OFF),0);
-    lv_obj_set_style_radius(btn_agua_r,32,0);
-    lv_obj_set_style_border_width(btn_agua_r,0,0);
-    lv_obj_set_style_pad_all(btn_agua_r,0,0);
-    lv_obj_clear_flag(btn_agua_r,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(btn_agua_r,LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_agua_r,cb_agua,LV_EVENT_CLICKED,nullptr);
-    lbl_agua_r=lv_label_create(btn_agua_r);
-    lv_label_set_text(lbl_agua_r,"AGUA");
-    lv_obj_set_style_text_font(lbl_agua_r,&lv_font_montserrat_20,0);
-    lv_obj_set_style_text_color(lbl_agua_r,lv_color_hex(COL_TEXT),0);
-    lv_obj_center(lbl_agua_r);
+    btn_agua_r=make_big_btn(tile_relays,"AGUA",COL_OFF,-140,260,65,cb_agua,nullptr);
 
     lv_obj_t *heat_box=lv_obj_create(tile_relays);
     lv_obj_set_size(heat_box,280,200);
@@ -1054,21 +1039,7 @@ static void build_tile_relays() {
       lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
       lv_obj_center(l); }
 
-    btn_sirena_r=lv_obj_create(tile_relays);
-    lv_obj_set_size(btn_sirena_r,260,65);
-    lv_obj_align(btn_sirena_r,LV_ALIGN_CENTER,0,140);
-    lv_obj_set_style_bg_color(btn_sirena_r,lv_color_hex(COL_OFF),0);
-    lv_obj_set_style_radius(btn_sirena_r,32,0);
-    lv_obj_set_style_border_width(btn_sirena_r,0,0);
-    lv_obj_set_style_pad_all(btn_sirena_r,0,0);
-    lv_obj_clear_flag(btn_sirena_r,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(btn_sirena_r,LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_sirena_r,cb_sirena,LV_EVENT_CLICKED,nullptr);
-    lbl_sirena_r=lv_label_create(btn_sirena_r);
-    lv_label_set_text(lbl_sirena_r,"SIRENA");
-    lv_obj_set_style_text_font(lbl_sirena_r,&lv_font_montserrat_20,0);
-    lv_obj_set_style_text_color(lbl_sirena_r,lv_color_hex(COL_TEXT),0);
-    lv_obj_center(lbl_sirena_r);
+    btn_sirena_r=make_big_btn(tile_relays,"SIRENA",COL_OFF,140,260,65,cb_sirena,nullptr);
 
     refresh_heat_ui();
     hint_relays=add_home_hint(tile_relays,LV_ALIGN_LEFT_MID,"HOME " LV_SYMBOL_LEFT);
@@ -1402,7 +1373,6 @@ static void build_scr_graph() {
 }
 
 // ── BUILD SCREEN HEATMAP ─────────────────────────────────────
-static void cb_open_heatmap(lv_event_t *e) { go_to(SCR_HEATMAP); }
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
