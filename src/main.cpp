@@ -1493,7 +1493,7 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
 
 static void log_load() {
     if(!log_label) return;
-    static char buf[8000];
+    static char buf[20000];
     buf[0] = '\0';
     int pos = 0;
 
@@ -1515,7 +1515,7 @@ static void log_load() {
 
     uint32_t added = 0;
     uint32_t head = hist_eh;
-    for(uint32_t i=0; i<count && added<80; i++){
+    for(uint32_t i=0; i<count; i++){
         if((i & 0x0F)==0) esp_task_wdt_reset();
         uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
         EvtRec r;
@@ -1554,9 +1554,9 @@ static void log_update_date_label() {
 
 static void cb_log_nav(lv_event_t *e) {
     int d = (int)(intptr_t)lv_event_get_user_data(e);
-    if(d < 0 && log_day_off == 0) return;
-    log_day_off = (uint32_t)((int32_t)log_day_off - d);
-    if((int32_t)log_day_off < 0) log_day_off = 0;
+    int32_t new_off = (int32_t)log_day_off + d;
+    if(new_off < 0) return;
+    log_day_off = (uint32_t)new_off;
     log_update_date_label();
     log_load();
 }
@@ -1595,22 +1595,8 @@ static void build_scr_log() {
     make_nav_btn(scr_log, "1d" LV_SYMBOL_DOWN, -1, 370, 154);
     make_nav_btn(scr_log, "7d" LV_SYMBOL_DOWN, -7, 370, 248);
 
-    // Botón SALIR abajo centrado
-    lv_obj_t *bsal = lv_obj_create(scr_log);
-    lv_obj_set_size(bsal, 130, 50);
-    lv_obj_set_pos(bsal, 175, 415);
-    lv_obj_set_style_bg_color(bsal, lv_color_hex(COL_OFF), 0);
-    lv_obj_set_style_radius(bsal, 8, 0);
-    lv_obj_set_style_border_width(bsal, 0, 0);
-    lv_obj_set_style_pad_all(bsal, 0, 0);
-    lv_obj_clear_flag(bsal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(bsal, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(bsal, cb_log_exit, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *lsal = lv_label_create(bsal);
-    lv_label_set_text(lsal, "SALIR");
-    lv_obj_set_style_text_font(lsal, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(lsal, lv_color_hex(COL_TEXT), 0);
-    lv_obj_center(lsal);
+    // Botón SALIR abajo centrado — estilo estándar
+    make_big_btn(scr_log, "SALIR", COL_OFF, 180, 280, 68, cb_log_exit, nullptr);
 
     // Contenedor scrollable centro — más estrecho para dar espacio a los botones
     log_cont = lv_obj_create(scr_log);
