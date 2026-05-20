@@ -4,11 +4,9 @@
 
 #define LV_COLOR_DEPTH 16
 
-#define LV_MEM_CUSTOM           1
-#define LV_MEM_CUSTOM_INCLUDE   <esp_heap_caps.h>
-#define LV_MEM_CUSTOM_ALLOC(size)        heap_caps_malloc((size), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-#define LV_MEM_CUSTOM_REALLOC(ptr, size) heap_caps_realloc((ptr), (size), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-#define LV_MEM_CUSTOM_FREE(ptr)          heap_caps_free(ptr)
+// LVGL 9.x: usar malloc/free estándar (Arduino ESP32 con PSRAM puede servir PSRAM vía malloc)
+// LV_MEM_CUSTOM era LVGL 8 API y es ignorado por LVGL 9.
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
 
 #define LV_USE_LOG     1
 #define LV_LOG_LEVEL   LV_LOG_LEVEL_WARN

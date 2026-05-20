@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.12 - FULL render mode (fix ST7701 PARTIAL crashes)"
+#define FW_VERSION "v2.13"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -1281,7 +1281,7 @@ static void chart_touch_scroll(lv_event_t *e) {
             uint32_t win=graph_zoom_h*12;
             uint32_t avail=(hist_th<MAX_TEMP)?hist_th:MAX_TEMP;
             int32_t max_off=(avail>win)?(int32_t)(avail-win):0;
-            int32_t dsamp = -(int32_t)((int64_t)dx * win / 360);
+            int32_t dsamp = (int32_t)((int64_t)dx * win / 360);
             graph_offset_samp=constrain(graph_offset_samp+dsamp, 0, max_off);
             graph_load();
         }
@@ -1443,8 +1443,6 @@ static void build_scr_heatmap() {
 
     centered_label(scr_heatmap, "PRESENCIA", &lv_font_montserrat_20, COL_TEXT, -220);
 
-    // Etiquetas días: L M X J V S D — encima de cada columna
-    // Grid: 294×288px en (90, 62). CW=42.
     static const char *DAYS[7]={"L","M","X","J","V","S","D"};
     for(int c=0;c<7;c++){
         lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1454,8 +1452,6 @@ static void build_scr_heatmap() {
         lv_obj_set_pos(l, 90 + c*42 + 14, 44);
     }
 
-    // Etiquetas horas: cada 3h a la izquierda de la grilla
-    // r=0→06h, r=3→09h, r=6→12h, r=9→15h, r=12→18h, r=15→21h, r=18→00h, r=21→03h
     static const char *HLBLS[]={"06","09","12","15","18","21","00","03"};
     for(int i=0;i<8;i++){
         lv_obj_t *l=lv_label_create(scr_heatmap);
@@ -1465,7 +1461,6 @@ static void build_scr_heatmap() {
         lv_obj_set_pos(l, 54, 62 + i*36);
     }
 
-    // Grilla: objeto vacío con LV_EVENT_DRAW_MAIN — cero bytes PSRAM extra
     hm_view = lv_obj_create(scr_heatmap);
     lv_obj_remove_style_all(hm_view);
     lv_obj_set_pos(hm_view, 90, 62);
@@ -1474,7 +1469,6 @@ static void build_scr_heatmap() {
     lv_obj_clear_flag(hm_view, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hm_view, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
-    // Leyenda y SALIR — debajo de la grilla (y≈358)
     { lv_obj_t *l=lv_label_create(scr_heatmap);
       lv_label_set_text(l,"- "); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
       lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,130,358); }
@@ -1490,7 +1484,7 @@ static void build_scr_heatmap() {
       lv_label_set_text(l," +"); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
       lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,258,358); }
 
-    make_big_btn(scr_heatmap,"SALIR",COL_OFF,168,200,40,cb_heatmap_exit,nullptr);
+    make_big_btn(scr_heatmap, "SALIR", COL_OFF, 168, 200, 40, cb_heatmap_exit, nullptr);
 }
 
 // ── VISOR LOG ────────────────────────────────────────────────
@@ -2042,10 +2036,14 @@ static void check_alarms() {
 static void do_switch(Screen s) {
     switch(s){
         case SCR_TV:
-            update_home(); update_sensors_tile(); update_relays_tile(); update_alarm_tile();
+            update_home();
+            update_sensors_tile();
+            update_relays_tile();
+            update_alarm_tile();
             lv_scr_load_anim(tv,LV_SCR_LOAD_ANIM_NONE,0,0,false);
-            if(enc_mode==ENC_FOCUS) focus_idle_ms=millis(); // refresh timeout
-            cur_scr=SCR_TV; return;
+            if(enc_mode==ENC_FOCUS) focus_idle_ms=millis();
+            cur_scr=SCR_TV;
+            return;
         case SCR_ALARM_CRIT:
             set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
             lv_scr_load_anim(scr_alarm,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
@@ -2073,7 +2071,7 @@ static void do_switch(Screen s) {
             lv_scr_load_anim(scr_graph,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
-            if(!scr_heatmap){ build_scr_heatmap(); }
+            if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
             else if(hm_view) lv_obj_invalidate(hm_view);
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
@@ -2083,7 +2081,8 @@ static void do_switch(Screen s) {
             cur_scr=SCR_HIST_MENU; return;
         case SCR_LOG:
             if(!scr_log){ build_scr_log(); }
-            log_update_date_label(); log_load();
+            log_update_date_label();
+            log_load();
             lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_LOG; return;
     }
@@ -2263,13 +2262,17 @@ void setup() {
     lv_init();
 
     lv_display_t *disp=lv_display_create(TFT_WIDTH,TFT_HEIGHT);
+    // Forzar RGB565 — LVGL 9.x usa RGB888 por defecto lo que causa sizeof(lv_color_t)=3
+    // y corrupción de heap en operaciones de color. Hay que setear antes del buffer.
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp,lvgl_flush_cb);
 
     // Buffer pantalla completa PSRAM — FULL mode evita crashes LVGL 9.x con ST7701 PARTIAL
-    size_t buf_sz=(size_t)TFT_WIDTH*TFT_HEIGHT*sizeof(lv_color_t);
-    lv_color_t *buf1=(lv_color_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
+    // 2 bytes/px fijo (RGB565) — no depender de sizeof(lv_color_t)
+    size_t buf_sz=(size_t)TFT_WIDTH*TFT_HEIGHT*2;
+    uint8_t *buf1=(uint8_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM);
+    if(!buf1){ Serial.println("[MEM] ERROR: malloc buf1 failed!"); while(1) delay(1000); }
     lv_display_set_buffers(disp,buf1,nullptr,buf_sz,LV_DISPLAY_RENDER_MODE_FULL);
-    Serial.printf("[MEM] LVGL buf: %u bytes PSRAM (FULL mode, sizeof lv_color_t=%u)\n", buf_sz, (unsigned)sizeof(lv_color_t));
 
     esp_timer_handle_t lt;
     esp_timer_create_args_t la={.callback=[](void*){lv_tick_inc(2);},.arg=nullptr,.name="lv"};
@@ -2293,24 +2296,22 @@ void setup() {
     tile_relays  =lv_tileview_add_tile(tv,2,1,LV_DIR_LEFT);
     tile_settings=lv_tileview_add_tile(tv,1,2,LV_DIR_TOP);
 
-    Serial.println("[UI] build home...");   build_tile_home();
-    Serial.println("[UI] build sensors..."); build_tile_sensors();
-    Serial.println("[UI] build relays...");  build_tile_relays();
-    Serial.println("[UI] build alarm...");   build_tile_alarm();
-    Serial.println("[UI] build settings..."); build_tile_settings();
-    Serial.println("[UI] build focus...");   build_focus_lists();
-    Serial.println("[UI] build scr_alarm..."); build_scr_alarm();
-    Serial.println("[UI] build scr_pin...");   build_scr_pin();
-    Serial.println("[UI] build scr_chpin..."); build_scr_change_pin();
-    Serial.println("[UI] build scr_arming..."); build_scr_arming();
-    Serial.println("[UI] build scr_dial...");   build_scr_dial();
-    Serial.println("[UI] build scr_graph...");  build_scr_graph();
+    build_tile_home();
+    build_tile_sensors();
+    build_tile_relays();
+    build_tile_alarm();
+    build_tile_settings();
+    build_focus_lists();
+    build_scr_alarm();
+    build_scr_pin();
+    build_scr_change_pin();
+    build_scr_arming();
+    build_scr_dial();
+    build_scr_graph();
     // scr_heatmap: lazy — se construye la primera vez que se abre
-    Serial.println("[UI] builds OK, loading screen...");
 
     lv_tileview_set_tile(tv,tile_home,LV_ANIM_OFF);
     lv_scr_load(tv);
-    Serial.println("[UI] rendering...");
     for(int i=0;i<20;i++){lv_timer_handler();delay(5);}
     Serial.println("Pantalla lista.");
 
