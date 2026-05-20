@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.16"
+#define FW_VERSION "v2.17"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -271,8 +271,8 @@ static lv_obj_t *harc[5], *rarc[4], *arc_alarm_zone, *arc_settings_zone, *lbl_al
 static lv_obj_t *lbl_sistema = nullptr, *lbl_temp_ext, *lbl_weather, *lbl_temp_int, *lbl_humidity;
 static lv_obj_t *lbl_wx_forecast = nullptr;
 
-// Sensores
-static lv_obj_t *sdot[5];
+// Historial tile
+static lv_obj_t *btn_hist[3] = {}; // Temperatura, Presencia, Registro
 
 // Relés
 static lv_obj_t *btn_agua_r=nullptr;
@@ -348,7 +348,7 @@ static lv_obj_t *hint_alarm=nullptr,   *hint_settings=nullptr;
 // ── Encoder focus / tile-cycle system ────────────────────────
 #define MAX_FOCUS 8
 struct FocusList { lv_obj_t *items[MAX_FOCUS]; bool home_nav[MAX_FOCUS]; int count; };
-static FocusList tile_focus[5]; // 0=home 1=relays 2=settings 3=sensors 4=alarm
+static FocusList tile_focus[5]; // 0=home 1=relays 2=settings 3=hist 4=alarm
 
 // Tile cycle order: home→relays→settings→sensors→alarm
 static const uint8_t TC_COL[]={1,2,1,0,1};
@@ -527,6 +527,9 @@ static void focus_exit();
 static void sync_tile_cycle_idx();
 static void cb_open_graph(lv_event_t *e);
 static void cb_open_hist_menu(lv_event_t *e);
+static void cb_hist_temp(lv_event_t *e);
+static void cb_hist_pres(lv_event_t *e);
+static void cb_hist_log(lv_event_t *e);
 
 // ── Navegación de tiles ──────────────────────────────────────
 // Layout: alarm(1,0) sensors(0,1) home(1,1) relays(2,1) settings(1,2)
@@ -906,28 +909,13 @@ static void build_tile_home() {
     lbl_humidity   =centered_label(tile_home,"--% HR",             &lv_font_montserrat_14,COL_MUTED, 148);
 }
 
-// ── BUILD TILE SENSORES ──────────────────────────────────────
-static const char *S_NAME[5]={"","Inundacion","Movimiento","Humo","Red 220V"};
-static void build_tile_sensors() {
+// ── BUILD TILE HISTORIAL ─────────────────────────────────────
+static void build_tile_hist() {
     bg(tile_sensors);
-    centered_label(tile_sensors,"SENSORES",&lv_font_montserrat_20,COL_TEXT,-175);
-    for(int i=1;i<=4;i++){
-        int y=-100+(i-1)*60;
-        lv_obj_t *card=lv_obj_create(tile_sensors);
-        lv_obj_set_size(card,300,44);
-        lv_obj_align(card,LV_ALIGN_CENTER,0,y);
-        lv_obj_set_style_bg_color(card,lv_color_hex(COL_CARD),0);
-        lv_obj_set_style_border_width(card,0,0);
-        lv_obj_set_style_radius(card,10,0);
-        lv_obj_set_style_pad_all(card,0,0);
-        lv_obj_clear_flag(card,LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_t *lbl=lv_label_create(card);
-        lv_label_set_text(lbl,S_NAME[i]);
-        lv_obj_set_style_text_font(lbl,&lv_font_montserrat_14,0);
-        lv_obj_set_style_text_color(lbl,lv_color_hex(COL_MUTED),0);
-        lv_obj_align(lbl,LV_ALIGN_LEFT_MID,14,0);
-        sdot[i]=make_dot_at(card,272,15);
-    }
+    centered_label(tile_sensors,"HISTORIAL",&lv_font_montserrat_20,COL_TEXT,-175);
+    btn_hist[0]=make_big_btn(tile_sensors,"Temperatura",COL_RELAY_DIM, -72,280,65,cb_hist_temp,nullptr);
+    btn_hist[1]=make_big_btn(tile_sensors,"Presencia",  COL_RELAY_DIM,   8,280,65,cb_hist_pres,nullptr);
+    btn_hist[2]=make_big_btn(tile_sensors,"Registro",   COL_RELAY_DIM,  88,280,65,cb_hist_log, nullptr);
     hint_sensors=add_home_hint(tile_sensors,LV_ALIGN_RIGHT_MID,LV_SYMBOL_RIGHT " HOME");
 }
 
@@ -1891,9 +1879,12 @@ static void build_focus_lists(){
       f.items[2]=btn_settings_pin; f.items[3]=btn_settings_anim;
       f.items[4]=btn_settings_hist;
       f.items[5]=hint_settings; f.home_nav[5]=true; }
-    // 3 = sensors tile (read-only — only HOME nav)
-    { FocusList &f=tile_focus[3]; f.count=1;
-      f.items[0]=hint_sensors; f.home_nav[0]=true; }
+    // 3 = hist tile
+    { FocusList &f=tile_focus[3]; f.count=4;
+      f.items[0]=btn_hist[0];  f.home_nav[0]=false;
+      f.items[1]=btn_hist[1];  f.home_nav[1]=false;
+      f.items[2]=btn_hist[2];  f.home_nav[2]=false;
+      f.items[3]=hint_sensors; f.home_nav[3]=true; }
     // 4 = alarm tile
     { FocusList &f=tile_focus[4]; f.count=2;
       f.items[0]=btn_arm;
@@ -1924,12 +1915,7 @@ static void update_home() {
     lv_label_set_text(lbl_alarm_badge,alarm_armed?"ALARMA\nON":"ALARMA\nOFF");
     lv_obj_set_style_text_color(lbl_alarm_badge,lv_color_hex(alarm_armed?COL_ALERT:COL_MUTED),0);
 }
-static void update_sensors_tile() {
-    lv_obj_set_style_bg_color(sdot[1],lv_color_hex(a6v3.input[1]?COL_ALERT:COL_OFF),0);
-    lv_obj_set_style_bg_color(sdot[2],lv_color_hex(!a6v3.input[4]?COL_ALERT:COL_OK),0);
-    lv_obj_set_style_bg_color(sdot[3],lv_color_hex(!a6v3.input[5]?COL_ALERT:COL_OK),0);
-    lv_obj_set_style_bg_color(sdot[4],lv_color_hex(a6v3.input[6]?COL_OK:COL_ALERT),0);
-}
+static void update_sensors_tile() { /* sensors tile replaced by hist tile */ }
 static void update_relays_tile() {
     if(btn_agua_r)   lv_obj_set_style_bg_color(btn_agua_r,  lv_color_hex(a6v3.output[1]?COL_OK:COL_OFF),0);
     if(btn_sirena_r) lv_obj_set_style_bg_color(btn_sirena_r,lv_color_hex(a6v3.output[3]?COL_ALERT:COL_OFF),0);
@@ -2219,6 +2205,9 @@ static void exec_focus_item() {
     else if(w==btn_settings_pin)  cb_open_change_pin(nullptr);
     else if(w==btn_settings_anim) cb_cycle_anim(nullptr);
     else if(w==btn_settings_hist) cb_open_hist_menu(nullptr);
+    else if(w==btn_hist[0])       cb_hist_temp(nullptr);
+    else if(w==btn_hist[1])       cb_hist_pres(nullptr);
+    else if(w==btn_hist[2])       cb_hist_log(nullptr);
     else if(w==btn_arm)           cb_go_pin(nullptr);
     else if(w==lbl_alarm_badge)   cb_alarm_badge(nullptr);
     else if(w==lbl_sistema)       cb_settings_icon(nullptr);
@@ -2298,7 +2287,7 @@ void setup() {
     tile_settings=lv_tileview_add_tile(tv,1,2,LV_DIR_TOP);
 
     build_tile_home();
-    build_tile_sensors();
+    build_tile_hist();
     build_tile_relays();
     build_tile_alarm();
     build_tile_settings();
