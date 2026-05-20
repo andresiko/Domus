@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.15"
+#define FW_VERSION "v2.16"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -299,6 +299,10 @@ static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
 static lv_obj_t           *log_cont      = nullptr;
 static uint32_t            log_day_off   = 0;
+static bool                log_hide_pres = false;
+static lv_obj_t           *btn_log_pres  = nullptr;
+static lv_obj_t           *lbl_log_pres_btn = nullptr;
+static lv_obj_t           *lbl_hist_mem  = nullptr;
 static lv_obj_t           *chart_temp    = nullptr;
 static lv_chart_series_t  *ser_int_g     = nullptr;
 static lv_chart_series_t  *ser_ext_g     = nullptr;
@@ -1494,6 +1498,7 @@ static void log_load() {
         f.seek(idx * sizeof(EvtRec));
         if(f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
         if(r.ts < 1000000000UL) continue;
+        if(log_hide_pres && (EvtType)r.type == EVT_PRESENCE) continue;
         time_t ts = (time_t)r.ts;
         if(ts < day_start || ts >= day_end) {
             if(ts < day_start) break;
@@ -1509,6 +1514,18 @@ static void log_load() {
     f.close();
     if(added==0) lv_label_set_text(log_label,"Sin eventos ese día");
     else         lv_label_set_text(log_label, buf);
+}
+
+static void log_update_pres_btn() {
+    if(btn_log_pres) lv_obj_set_style_bg_color(btn_log_pres,
+        lv_color_hex(log_hide_pres ? COL_OFF : COL_RELAY_DIM), 0);
+    if(lbl_log_pres_btn) lv_label_set_text(lbl_log_pres_btn,
+        log_hide_pres ? "Mov: oculto" : "Mov: visible");
+}
+static void cb_log_toggle_pres(lv_event_t *e) {
+    log_hide_pres = !log_hide_pres;
+    log_update_pres_btn();
+    log_load();
 }
 
 static lv_obj_t *lbl_log_date = nullptr;
@@ -1558,6 +1575,23 @@ static void build_scr_log() {
     lv_obj_set_style_bg_color(scr_log, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(scr_log, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_log, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Toggle visibilidad presencia — barra superior
+    btn_log_pres = lv_obj_create(scr_log);
+    lv_obj_set_size(btn_log_pres, 160, 36);
+    lv_obj_set_pos(btn_log_pres, 160, 6);
+    lv_obj_set_style_bg_color(btn_log_pres, lv_color_hex(COL_RELAY_DIM), 0);
+    lv_obj_set_style_radius(btn_log_pres, 18, 0);
+    lv_obj_set_style_border_width(btn_log_pres, 0, 0);
+    lv_obj_set_style_pad_all(btn_log_pres, 0, 0);
+    lv_obj_clear_flag(btn_log_pres, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn_log_pres, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_log_pres, cb_log_toggle_pres, LV_EVENT_CLICKED, nullptr);
+    lbl_log_pres_btn = lv_label_create(btn_log_pres);
+    lv_label_set_text(lbl_log_pres_btn, "Mov: visible");
+    lv_obj_set_style_text_font(lbl_log_pres_btn, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(lbl_log_pres_btn, lv_color_hex(COL_TEXT), 0);
+    lv_obj_center(lbl_log_pres_btn);
 
     // Botones izquierda — 2 botones centrados verticalmente
     make_nav_btn(scr_log, LV_SYMBOL_UP "7d",  7,  6, 154);
@@ -1613,6 +1647,7 @@ static void build_scr_hist_menu() {
     lv_obj_set_style_bg_opa(scr_hist_menu, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_hist_menu, LV_OBJ_FLAG_SCROLLABLE);
     centered_label(scr_hist_menu,"HISTORIAL",&lv_font_montserrat_20,COL_TEXT,-180);
+    lbl_hist_mem = centered_label(scr_hist_menu,"...", &lv_font_montserrat_14, COL_MUTED, -130);
     hist_menu_btns[0]=make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -72,300,68,cb_hist_temp,nullptr);
     hist_menu_btns[1]=make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,300,68,cb_hist_pres,nullptr);
     hist_menu_btns[2]=make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   88,300,68,cb_hist_log, nullptr);
@@ -2029,6 +2064,14 @@ static void do_switch(Screen s) {
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
             if(!scr_hist_menu){ build_scr_hist_menu(); }
+            if(lbl_hist_mem){
+                size_t fs_used = LittleFS.usedBytes(), fs_tot = LittleFS.totalBytes();
+                char mbuf[40];
+                snprintf(mbuf,sizeof(mbuf),"Historial: %d KB / %d KB  (%d%%)",
+                    (int)(fs_used/1024),(int)(fs_tot/1024),
+                    fs_tot>0?(int)(fs_used*100/fs_tot):0);
+                lv_label_set_text(lbl_hist_mem, mbuf);
+            }
             hist_menu_set_sel(0);
             enc_accum = 0;
             lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_NONE,0,0,false);
@@ -2036,6 +2079,7 @@ static void do_switch(Screen s) {
         case SCR_LOG:
             if(!scr_log){ build_scr_log(); }
             log_update_date_label();
+            log_update_pres_btn();
             log_load();
             lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_LOG; return;
