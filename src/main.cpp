@@ -293,6 +293,8 @@ static lv_obj_t           *scr_graph     = nullptr;
 static lv_obj_t           *scr_heatmap   = nullptr;
 static lv_obj_t           *hm_view       = nullptr;
 static lv_obj_t           *scr_hist_menu = nullptr;
+static lv_obj_t           *hist_menu_btns[4] = {};
+static int                 hist_menu_sel = 0;
 static lv_obj_t           *scr_log       = nullptr;
 static lv_obj_t           *log_label     = nullptr;
 static lv_obj_t           *log_cont      = nullptr;
@@ -1626,16 +1628,25 @@ static void cb_hist_pres(lv_event_t *e)  { go_to(SCR_HEATMAP); }
 static void cb_hist_log(lv_event_t *e)   { log_day_off=0; go_to(SCR_LOG); }
 static void cb_hist_exit(lv_event_t *e)  { go_to(SCR_TV); }
 
+static void hist_menu_set_sel(int idx) {
+    hist_menu_sel = idx;
+    for(int i=0;i<4;i++){
+        if(!hist_menu_btns[i]) continue;
+        lv_obj_set_style_border_width(hist_menu_btns[i], i==idx ? 2 : 0, 0);
+        if(i==idx) lv_obj_set_style_border_color(hist_menu_btns[i], lv_color_hex(COL_TEXT), 0);
+    }
+}
+
 static void build_scr_hist_menu() {
     scr_hist_menu = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr_hist_menu, lv_color_hex(COL_BG), 0);
     lv_obj_set_style_bg_opa(scr_hist_menu, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr_hist_menu, LV_OBJ_FLAG_SCROLLABLE);
     centered_label(scr_hist_menu,"HISTORIAL",&lv_font_montserrat_20,COL_TEXT,-180);
-    make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -72,300,68,cb_hist_temp,nullptr);
-    make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,300,68,cb_hist_pres,nullptr);
-    make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   88,300,68,cb_hist_log, nullptr);
-    make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        170,280,52,cb_hist_exit,nullptr);
+    hist_menu_btns[0]=make_big_btn(scr_hist_menu,"Temperatura",COL_RELAY_DIM,  -72,300,68,cb_hist_temp,nullptr);
+    hist_menu_btns[1]=make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,300,68,cb_hist_pres,nullptr);
+    hist_menu_btns[2]=make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   88,300,68,cb_hist_log, nullptr);
+    hist_menu_btns[3]=make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        170,280,52,cb_hist_exit,nullptr);
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
@@ -2048,6 +2059,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
             if(!scr_hist_menu){ build_scr_hist_menu(); }
+            hist_menu_set_sel(0);
             lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HIST_MENU; return;
         case SCR_LOG:
@@ -2371,6 +2383,9 @@ void loop() {
         } else if(cur_scr==SCR_LOG && log_cont){
             enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
             if(steps!=0) lv_obj_scroll_by(log_cont, 0, steps*30, LV_ANIM_OFF);
+        } else if(cur_scr==SCR_HIST_MENU){
+            enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
+            if(steps!=0) hist_menu_set_sel(((hist_menu_sel+steps)%4+4)%4);
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
@@ -2418,8 +2433,15 @@ void loop() {
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
                     } else if(cur_scr==SCR_PIN||cur_scr==SCR_CHANGE_PIN){
                         memset(pin_buf,0,5); pin_len=0; go_to(SCR_TV);
-                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_HIST_MENU||cur_scr==SCR_LOG){
+                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_LOG){
                         go_to(SCR_TV);
+                    } else if(cur_scr==SCR_HIST_MENU){
+                        switch(hist_menu_sel){
+                            case 0: cb_hist_temp(nullptr); break;
+                            case 1: go_to(SCR_HEATMAP);   break;
+                            case 2: log_day_off=0; go_to(SCR_LOG); break;
+                            default: go_to(SCR_TV);        break;
+                        }
                     } else if(cur_scr==SCR_TV){
                         if(enc_mode==ENC_IDLE) focus_enter();
                         else exec_focus_item();
