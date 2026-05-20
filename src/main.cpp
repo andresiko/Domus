@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.18"
+#define FW_VERSION "v2.19"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -56,9 +56,11 @@ static int cfg_dim_brightness = 5;   // brillo al hacer dim (1-100)
 static uint8_t cfg_anim       = 0;   // 0=ninguna 1=deslizar
 
 // ── Calefacción ───────────────────────────────────────────────
-enum HeatMode { HM_OFF, HM_MANUAL, HM_CONSIGNA };
+enum HeatMode { HM_OFF, HM_MANUAL, HM_CONSIGNA, HM_PROGRAMA };
 static HeatMode heat_mode     = HM_OFF;
 static int      heat_setpoint = 20;
+static int      cfg_eco_sp    = 16;
+static uint8_t  cfg_prog[7]   = {};  // bit r = block r activo (CONFORT) para wday
 static float    tuya_temp_int = NAN;
 static float    tuya_humidity = NAN;
 
@@ -191,7 +193,7 @@ static void lvgl_flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px) {
 }
 
 // ── Navegación (enum y estado antes de touch_read_cb) ────────
-enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN, SCR_GRAPH, SCR_HEATMAP, SCR_HIST_MENU, SCR_LOG };
+enum Screen { SCR_TV, SCR_ALARM_CRIT, SCR_PIN, SCR_ARMING_SCR, SCR_DIAL, SCR_CHANGE_PIN, SCR_GRAPH, SCR_HEATMAP, SCR_HIST_MENU, SCR_LOG, SCR_PROG };
 static Screen cur_scr=SCR_TV, pend_scr=SCR_TV;
 static bool   scr_change=false;
 
@@ -287,6 +289,11 @@ static lv_obj_t *lbl_settings_ip=nullptr, *lbl_cfg_brightness=nullptr, *lbl_cfg_
 static lv_obj_t *lbl_broker_status=nullptr, *lbl_cfg_anim=nullptr;
 // Overlays
 static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_dial=nullptr, *scr_change_pin=nullptr;
+
+// Programa calefacción
+static lv_obj_t           *scr_prog      = nullptr;
+static lv_obj_t           *prog_cells[7][6] = {};
+static lv_obj_t           *lbl_eco_sp    = nullptr;
 
 // Graph
 static lv_obj_t           *scr_graph     = nullptr;
@@ -792,11 +799,23 @@ static void heat_set_mode(HeatMode m) {
 }
 
 static void check_heating_auto() {
-    if (heat_mode != HM_CONSIGNA) return;
-    if (isnan(tuya_temp_int)) return;
-    const float hyst = 0.5f;
-    if (tuya_temp_int < heat_setpoint - hyst && !a6v3.output[2]) relay_set(2, true);
-    else if (tuya_temp_int > heat_setpoint + hyst && a6v3.output[2])  relay_set(2, false);
+    if(heat_mode == HM_CONSIGNA) {
+        if(isnan(tuya_temp_int)) return;
+        const float hyst = 0.5f;
+        if(tuya_temp_int < heat_setpoint - hyst && !a6v3.output[2]) relay_set(2, true);
+        else if(tuya_temp_int > heat_setpoint + hyst && a6v3.output[2]) relay_set(2, false);
+    } else if(heat_mode == HM_PROGRAMA) {
+        if(isnan(tuya_temp_int)) return;
+        time_t now = time(NULL);
+        if(now < 1000000000L) return;
+        struct tm t; localtime_r(&now, &t);
+        int block = t.tm_hour / 4; // 6 bloques de 4h (0..5)
+        bool confort = (cfg_prog[t.tm_wday] >> block) & 1;
+        float target = confort ? (float)heat_setpoint : (float)cfg_eco_sp;
+        const float hyst = 0.5f;
+        if(tuya_temp_int < target - hyst && !a6v3.output[2]) relay_set(2, true);
+        else if(tuya_temp_int > target + hyst && a6v3.output[2]) relay_set(2, false);
+    }
 }
 
 // ── BUILD TILE HOME ──────────────────────────────────────────
@@ -927,7 +946,18 @@ static void cb_agua(lv_event_t *e)        { if(swipe_blocked()) return; relay_se
 static void cb_sirena(lv_event_t *e)      { if(swipe_blocked()) return; relay_set(3,!a6v3.output[3]); }
 static void cb_hm_manual(lv_event_t *e)   { if(swipe_blocked()) return; heat_set_mode(HM_MANUAL); }
 static void cb_hm_consigna(lv_event_t *e) { if(swipe_blocked()) return; heat_set_mode(HM_CONSIGNA); }
-static void cb_hm_prog(lv_event_t *e)     { /* Fase B */ }
+static void cb_hm_prog(lv_event_t *e) {
+    if(swipe_blocked()) return;
+    if(heat_mode == HM_PROGRAMA) {
+        heat_mode = HM_OFF; relay_set(2, false);
+    } else {
+        heat_mode = HM_PROGRAMA;
+    }
+    log_event(EVT_HEAT_MODE, (uint8_t)heat_mode);
+    prefs.begin("domus",false); prefs.putInt("heat_mode",(int)heat_mode); prefs.end();
+    refresh_heat_ui();
+    if(heat_mode == HM_PROGRAMA) go_to(SCR_PROG);
+}
 static void cb_setpoint_btn(lv_event_t *e) {
     if(swipe_blocked()) return;
     if(heat_mode != HM_CONSIGNA) {
@@ -942,7 +972,7 @@ static void refresh_heat_ui() {
     if(!btn_hm[0]) return;
     lv_obj_set_style_bg_color(btn_hm[0],lv_color_hex(heat_mode==HM_MANUAL?COL_OK:COL_OFF),0);
     lv_obj_set_style_bg_color(btn_hm[1],lv_color_hex(heat_mode==HM_CONSIGNA?COL_OK:COL_OFF),0);
-    lv_obj_set_style_bg_color(btn_hm[2],lv_color_hex(COL_OFF),0);
+    lv_obj_set_style_bg_color(btn_hm[2],lv_color_hex(heat_mode==HM_PROGRAMA?COL_OK:COL_OFF),0);
 }
 
 static void build_tile_relays() {
@@ -1499,7 +1529,7 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
         case EVT_RELAY_AGUA:    return v ? "Agua ON"     : "Agua OFF";
         case EVT_RELAY_CALEF:   return v ? "Calef ON"    : "Calef OFF";
         case EVT_RELAY_SIRENA:  return v ? "Sirena ON"   : "Sirena OFF";
-        case EVT_HEAT_MODE:     return aux==HM_OFF?"Calef OFF":aux==HM_MANUAL?"Calef Manual":"Calef Consigna";
+        case EVT_HEAT_MODE:     return v==HM_OFF?"Calef OFF":v==HM_MANUAL?"Calef Manual":v==HM_CONSIGNA?"Calef Consigna":"Calef Programa";
         case EVT_ALARM_ARM:     return "Alarma ARMADA";
         case EVT_ALARM_DISARM:  return "Alarma Desarmada";
         case EVT_ALARM_TRIGGER: return "INTRUSION";
@@ -1695,6 +1725,108 @@ static void build_scr_hist_menu() {
     hist_menu_btns[1]=make_big_btn(scr_hist_menu,"Presencia",  COL_RELAY_DIM,    8,300,68,cb_hist_pres,nullptr);
     hist_menu_btns[2]=make_big_btn(scr_hist_menu,"Registro",   COL_RELAY_DIM,   88,300,68,cb_hist_log, nullptr);
     hist_menu_btns[3]=make_big_btn(scr_hist_menu,"SALIR",      COL_OFF,        170,280,52,cb_hist_exit,nullptr);
+}
+
+// ── BUILD SCREEN PROGRAMA ────────────────────────────────────
+static void cb_prog_cell(lv_event_t *e) {
+    uint8_t data = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+    uint8_t col = data >> 4;
+    uint8_t row = data & 0x0F;
+    int wday = (col + 1) % 7;
+    cfg_prog[wday] ^= (1 << row);
+    bool on = (cfg_prog[wday] >> row) & 1;
+    if(prog_cells[col][row])
+        lv_obj_set_style_bg_color(prog_cells[col][row], lv_color_hex(on ? COL_RELAY_DIM : COL_OFF), 0);
+    Preferences p; p.begin("heat", false);
+    char k[8]; snprintf(k, sizeof(k), "prog%d", wday);
+    p.putInt(k, cfg_prog[wday]);
+    p.end();
+}
+static void cb_eco_minus(lv_event_t *e) {
+    if(cfg_eco_sp > 10) cfg_eco_sp--;
+    if(lbl_eco_sp){ char b[14]; snprintf(b,sizeof(b),"ECO: %d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
+    Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
+}
+static void cb_eco_plus(lv_event_t *e) {
+    if(cfg_eco_sp < heat_setpoint - 1) cfg_eco_sp++;
+    if(lbl_eco_sp){ char b[14]; snprintf(b,sizeof(b),"ECO: %d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
+    Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
+}
+static void cb_prog_exit(lv_event_t *e) { go_to(SCR_TV); }
+
+static void build_scr_prog() {
+    scr_prog = lv_obj_create(nullptr); bg(scr_prog);
+    centered_label(scr_prog, "PROGRAMA", &lv_font_montserrat_20, COL_TEXT, -210);
+
+    static const char *DAYS[7] = {"L","M","X","J","V","S","D"};
+    static const char *BLKLBLS[6] = {"00","04","08","12","16","20"};
+
+    const int CELL_W=50, CELL_H=36;
+    const int GX=58, GY=76;   // origen grid
+    const int COL_W=52, ROW_H=38;
+
+    // Cabeceras días
+    for(int c=0;c<7;c++){
+        lv_obj_t *l=lv_label_create(scr_prog);
+        lv_label_set_text(l, DAYS[c]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+        lv_obj_set_pos(l, GX+c*COL_W+20, 57);
+    }
+    // Etiquetas bloques (horas)
+    for(int r=0;r<6;r++){
+        lv_obj_t *l=lv_label_create(scr_prog);
+        lv_label_set_text(l, BLKLBLS[r]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
+        lv_obj_set_pos(l, 8, GY+r*ROW_H+12);
+    }
+    // Celdas grid 7×6
+    for(int c=0;c<7;c++){
+        int wday=(c+1)%7;
+        for(int r=0;r<6;r++){
+            bool on=(cfg_prog[wday]>>r)&1;
+            lv_obj_t *cell=lv_obj_create(scr_prog);
+            lv_obj_set_size(cell, CELL_W, CELL_H);
+            lv_obj_set_pos(cell, GX+c*COL_W+1, GY+r*ROW_H+1);
+            lv_obj_set_style_bg_color(cell, lv_color_hex(on?COL_RELAY_DIM:COL_OFF), 0);
+            lv_obj_set_style_radius(cell, 4, 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(cell, cb_prog_cell, LV_EVENT_CLICKED, (void*)(uintptr_t)((uint8_t)((c<<4)|r)));
+            prog_cells[c][r]=cell;
+        }
+    }
+
+    // Controles ECO setpoint: [−] ECO: 16°C [+]
+    { lv_obj_t *b=lv_obj_create(scr_prog);
+      lv_obj_set_size(b,56,40); lv_obj_align(b,LV_ALIGN_CENTER,-90,+108);
+      lv_obj_set_style_bg_color(b,lv_color_hex(COL_CARD),0);
+      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
+      lv_obj_set_style_pad_all(b,0,0);
+      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(b,cb_eco_minus,LV_EVENT_CLICKED,nullptr);
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"\xe2\x88\x92"); // −
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
+
+    { char ebuf[14]; snprintf(ebuf,sizeof(ebuf),"ECO: %d\xc2\xb0""C",cfg_eco_sp);
+      lbl_eco_sp = centered_label(scr_prog, ebuf, &lv_font_montserrat_20, COL_TEXT, +108); }
+
+    { lv_obj_t *b=lv_obj_create(scr_prog);
+      lv_obj_set_size(b,56,40); lv_obj_align(b,LV_ALIGN_CENTER,+90,+108);
+      lv_obj_set_style_bg_color(b,lv_color_hex(COL_CARD),0);
+      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
+      lv_obj_set_style_pad_all(b,0,0);
+      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(b,cb_eco_plus,LV_EVENT_CLICKED,nullptr);
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"+");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
+
+    make_big_btn(scr_prog, "SALIR", COL_OFF, +165, 220, 52, cb_prog_exit, nullptr);
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
@@ -1924,10 +2056,10 @@ static void build_focus_lists(){
       f.items[0]=lbl_alarm_badge; f.home_nav[0]=false;
       f.items[1]=lbl_sistema;     f.home_nav[1]=false; }
     // 1 = relays tile
-    { FocusList &f=tile_focus[1]; f.count=6;
+    { FocusList &f=tile_focus[1]; f.count=7;
       f.items[0]=btn_agua_r;   f.items[1]=btn_hm[0];  f.items[2]=btn_hm[1];
-      f.items[3]=btn_setpoint; f.items[4]=btn_sirena_r;
-      f.items[5]=hint_relays;  f.home_nav[5]=true; }
+      f.items[3]=btn_setpoint; f.items[4]=btn_hm[2];  f.items[5]=btn_sirena_r;
+      f.items[6]=hint_relays;  f.home_nav[6]=true; }
     // 2 = settings tile
     { FocusList &f=tile_focus[2]; f.count=5;
       f.items[0]=btn_settings_br; f.items[1]=btn_settings_dim;
@@ -2131,6 +2263,14 @@ static void do_switch(Screen s) {
             log_load();
             lv_scr_load_anim(scr_log,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_LOG; return;
+        case SCR_PROG:
+            if(!scr_prog){ esp_task_wdt_reset(); build_scr_prog(); }
+            if(lbl_eco_sp){ char b[14]; snprintf(b,sizeof(b),"ECO: %d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
+            for(int c=0;c<7;c++){ int wd=(c+1)%7;
+                for(int r=0;r<6;r++) if(prog_cells[c][r])
+                    lv_obj_set_style_bg_color(prog_cells[c][r], lv_color_hex((cfg_prog[wd]>>r)&1?COL_RELAY_DIM:COL_OFF), 0); }
+            lv_scr_load_anim(scr_prog,LV_SCR_LOAD_ANIM_NONE,0,0,false);
+            cur_scr=SCR_PROG; return;
     }
 }
 
@@ -2260,6 +2400,7 @@ static void exec_focus_item() {
     if     (w==btn_agua_r)        cb_agua(nullptr);
     else if(w==btn_hm[0])         cb_hm_manual(nullptr);
     else if(w==btn_hm[1])         cb_hm_consigna(nullptr);
+    else if(w==btn_hm[2])         cb_hm_prog(nullptr);
     else if(w==btn_setpoint)      cb_setpoint_btn(nullptr);
     else if(w==btn_sirena_r)      cb_sirena(nullptr);
     else if(w==btn_settings_br)   cb_open_brightness(nullptr);
@@ -2291,6 +2432,10 @@ void setup() {
     heat_mode         =(HeatMode)prefs.getInt("heat_mode",0);
     prefs.getString("pin","1234").toCharArray(cfg_pin,sizeof(cfg_pin));
     prefs.end();
+    { Preferences ph; ph.begin("heat",true);
+      cfg_eco_sp=(int)ph.getInt("eco_sp",16);
+      for(int d=0;d<7;d++){ char k[8]; snprintf(k,sizeof(k),"prog%d",d); cfg_prog[d]=(uint8_t)ph.getInt(k,0); }
+      ph.end(); }
 
     Wire.begin(I2C_SDA,I2C_SCL);
     lcd_power_on();
@@ -2504,7 +2649,7 @@ void loop() {
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
                     } else if(cur_scr==SCR_PIN||cur_scr==SCR_CHANGE_PIN){
                         memset(pin_buf,0,5); pin_len=0; go_to(SCR_TV);
-                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_LOG){
+                    } else if(cur_scr==SCR_GRAPH||cur_scr==SCR_HEATMAP||cur_scr==SCR_LOG||cur_scr==SCR_PROG){
                         go_to(SCR_TV);
                     } else if(cur_scr==SCR_HIST_MENU){
                         switch(hist_menu_sel){
