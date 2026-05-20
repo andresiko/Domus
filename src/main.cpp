@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.14"
+#define FW_VERSION "v2.15"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -2030,6 +2030,7 @@ static void do_switch(Screen s) {
         case SCR_HIST_MENU:
             if(!scr_hist_menu){ build_scr_hist_menu(); }
             hist_menu_set_sel(0);
+            enc_accum = 0;
             lv_scr_load_anim(scr_hist_menu,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HIST_MENU; return;
         case SCR_LOG:
@@ -2199,7 +2200,10 @@ void setup() {
 
     Wire.begin(I2C_SDA,I2C_SCL);
     lcd_power_on();
+    delay(200);   // extra init time for CST8XX after LCD reset
     touch_init();
+    if(touch_i2c_addr) Serial.printf("[TOUCH] Found at 0x%02X\n", touch_i2c_addr);
+    else               Serial.println("[TOUCH] NOT found — will retry in loop");
 
     ledcSetup(0,5000,8);
     ledcAttachPin(TFT_BL_PIN,0);
@@ -2355,7 +2359,10 @@ void loop() {
             if(steps!=0) lv_obj_scroll_by(log_cont, 0, steps*30, LV_ANIM_OFF);
         } else if(cur_scr==SCR_HIST_MENU){
             enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
-            if(steps!=0) hist_menu_set_sel(((hist_menu_sel+steps)%4+4)%4);
+            if(steps!=0){
+                Serial.printf("[ENC] hist d=%d steps=%d sel:%d->%d\n",d,steps,hist_menu_sel,((hist_menu_sel+steps)%4+4)%4);
+                hist_menu_set_sel(((hist_menu_sel+steps)%4+4)%4);
+            }
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
@@ -2565,6 +2572,13 @@ void loop() {
             a6v3.input[1],a6v3.input[4],a6v3.input[5],a6v3.input[6],
             a6v3.output[1],a6v3.output[2],a6v3.output[3],
             (int)heat_mode,heat_setpoint,tuya_temp_int);
+    }
+
+    // Reintento touch si no se encontró en setup (IC puede necesitar >100ms tras reset)
+    if(!touch_i2c_addr){
+        static unsigned long touch_retry_ts = 0;
+        if(millis()-touch_retry_ts > 2000){ touch_retry_ts=millis(); touch_init();
+            if(touch_i2c_addr) Serial.printf("[TOUCH] Found on retry: 0x%02X\n", touch_i2c_addr); }
     }
 
     lv_timer_handler();
