@@ -1469,22 +1469,7 @@ static void build_scr_heatmap() {
     lv_obj_clear_flag(hm_view, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hm_view, hm_draw_event, LV_EVENT_DRAW_MAIN, nullptr);
 
-    { lv_obj_t *l=lv_label_create(scr_heatmap);
-      lv_label_set_text(l,"- "); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,130,358); }
-    for(int i=0;i<5;i++){
-        lv_obj_t *b=lv_obj_create(scr_heatmap);
-        lv_obj_set_size(b,20,12); lv_obj_set_pos(b,148+i*22,361);
-        lv_obj_set_style_border_width(b,0,0); lv_obj_set_style_pad_all(b,0,0);
-        lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE);
-        uint8_t t=(uint8_t)(i*63);
-        lv_obj_set_style_bg_color(b, lv_color_mix(lv_color_hex(0x0A9FFF),lv_color_hex(0x151515),t), 0);
-    }
-    { lv_obj_t *l=lv_label_create(scr_heatmap);
-      lv_label_set_text(l," +"); lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0); lv_obj_set_pos(l,258,358); }
-
-    make_big_btn(scr_heatmap, "SALIR", COL_OFF, 168, 200, 40, cb_heatmap_exit, nullptr);
+    make_big_btn(scr_heatmap, "SALIR", COL_OFF, 180, 280, 68, cb_heatmap_exit, nullptr);
 }
 
 // ── VISOR LOG ────────────────────────────────────────────────
