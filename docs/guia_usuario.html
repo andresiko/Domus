@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOMMUS — Guía de uso</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg:        #ffffff;
+    --card:      #f7f7f8;
+    --border:    #e2e2e6;
+    --text:      #1a1a2e;
+    --muted:     #6b7280;
+    --accent:    #1d4ed8;
+    --ok:        #16a34a;
+    --alert:     #dc2626;
+    --warn:      #d97706;
+    --agua:      #0d9488;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 48px 40px;
+  }
+
+  /* ── PORTADA ── */
+  .cover {
+    text-align: center;
+    padding: 60px 0 50px;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 48px;
+  }
+  .cover .logo {
+    font-size: 52px;
+    font-weight: 700;
+    letter-spacing: -2px;
+    color: var(--accent);
+  }
+  .cover .logo span { color: var(--text); }
+  .cover .subtitle {
+    font-size: 16px;
+    color: var(--muted);
+    margin-top: 8px;
+    font-weight: 400;
+  }
+  .cover .version {
+    display: inline-block;
+    margin-top: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  /* ── SECCIONES ── */
+  h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-top: 48px;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 10px;
+    color: var(--text);
+  }
+  p { margin-bottom: 12px; }
+
+  /* ── DIAGRAMA NAVEGACIÓN ── */
+  .nav-diagram {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin: 28px 0;
+  }
+  .nav-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+  .nav-tile {
+    width: 110px; height: 52px;
+    border-radius: 12px;
+    border: 2px solid var(--border);
+    background: var(--card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .nav-tile.home {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  .nav-arrow {
+    font-size: 20px;
+    color: var(--muted);
+    padding: 0 8px;
+    line-height: 1;
+  }
+  .nav-arrow.vert {
+    padding: 6px 0;
+    display: flex;
+    justify-content: center;
+    width: 110px;
+  }
+
+  /* ── STEPS ── */
+  .steps { margin: 12px 0 16px; }
+  .steps li {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 10px;
+    align-items: flex-start;
+  }
+  .steps li .num {
+    width: 24px; height: 24px;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  /* ── CALLOUTS ── */
+  .callout {
+    border-left: 4px solid;
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.info  { border-color: var(--accent); background: #eff6ff; }
+  .callout.ok    { border-color: var(--ok);     background: #f0fdf4; }
+  .callout.alert { border-color: var(--alert);  background: #fef2f2; }
+  .callout.warn  { border-color: var(--warn);   background: #fffbeb; }
+  .callout strong { display: block; margin-bottom: 4px; }
+
+  /* ── TABLAS ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  th {
+    background: var(--card);
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    border-bottom: 2px solid var(--border);
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  /* ── BOTONES ILUSTRATIVOS ── */
+  .btn-demo {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    vertical-align: middle;
+  }
+  .btn-demo.blue  { background: #1d4ed8; color: white; }
+  .btn-demo.red   { background: #991b1b; color: white; }
+  .btn-demo.green { background: #065f46; color: white; }
+  .btn-demo.grey  { background: #374151; color: white; }
+
+  /* ── NOTIFICACIONES ── */
+  .notif {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  .notif .emoji { font-size: 22px; line-height: 1; flex-shrink: 0; }
+  .notif .title { font-weight: 600; margin-bottom: 2px; }
+  .notif .desc  { color: var(--muted); font-size: 13px; }
+
+  /* ── EMERGENCY TABLE ── */
+  .emerg td:first-child { font-weight: 600; }
+  .emerg tr:nth-child(1) td:first-child { color: var(--alert); }
+  .emerg tr:nth-child(2) td:first-child { color: var(--alert); }
+  .emerg tr:nth-child(3) td:first-child { color: var(--alert); }
+  .emerg tr:nth-child(4) td:first-child { color: var(--warn);  }
+  .emerg tr:nth-child(5) td:first-child { color: var(--agua);  }
+
+  /* ── FOOTER ── */
+  .footer {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ── PRINT ── */
+  @media print {
+    body { padding: 20px 28px; font-size: 13px; }
+    h2 { page-break-after: avoid; }
+    .callout, .notif, table { page-break-inside: avoid; }
+    .cover { padding: 30px 0 30px; }
+    @import url() { } /* no fonts en print */
+  }
+</style>
+</head>
+<body>
+
+<!-- PORTADA -->
+<div class="cover">
+  <div class="logo">DOM<span>MUS</span></div>
+  <div class="subtitle">Sistema de control del hogar</div>
+  <div class="version">Guía de uso · 2025</div>
+</div>
+
+
+<!-- SECCIÓN 1: PANTALLA -->
+<h2><span class="icon">📱</span> La pantalla</h2>
+
+<p>La pantalla redonda y táctil es el control central del sistema. Se navega <strong>deslizando el dedo</strong> en cualquier dirección.</p>
+
+<div class="nav-diagram">
+  <div class="nav-tile">ALARMA</div>
+  <div class="nav-arrow vert">↑ ↓</div>
+  <div class="nav-row">
+    <div class="nav-tile">HISTORIAL</div>
+    <div class="nav-arrow">← →</div>
+    <div class="nav-tile home">INICIO</div>
+    <div class="nav-arrow">← →</div>
+    <div class="nav-tile">RELÉS</div>
+  </div>
+  <div class="nav-arrow vert">↑ ↓</div>
+  <div class="nav-tile">AJUSTES</div>
+</div>
+
+<table>
+  <tr><th>Pantalla</th><th>Qué muestra</th></tr>
+  <tr><td><strong>INICIO</strong></td><td>Temperatura, presencia, estado del agua y de la alarma</td></tr>
+  <tr><td><strong>RELÉS</strong></td><td>Control del agua, sirena y calefacción</td></tr>
+  <tr><td><strong>ALARMA</strong></td><td>Armar y desarmar el sistema de intrusión</td></tr>
+  <tr><td><strong>HISTORIAL</strong></td><td>Gráficas de temperatura, mapa de presencia, registro</td></tr>
+  <tr><td><strong>AJUSTES</strong></td><td>Brillo, atenuación automática, cambio de PIN</td></tr>
+</table>
+
+<div class="callout info">
+  <strong>La pantalla se apaga sola</strong>
+  Es normal — se atenúa tras unos minutos sin uso. Un toque en cualquier punto la reactiva.
+</div>
+
+
+<!-- SECCIÓN 2: ALARMA INTRUSIÓN -->
+<h2><span class="icon">🛡</span> Alarma de intrusión</h2>
+
+<h3>Armar la alarma</h3>
+<ol class="steps">
+  <li><div class="num">1</div><div>Desliza a la pantalla <strong>ALARMA</strong></div></li>
+  <li><div class="num">2</div><div>Pulsa <span class="btn-demo grey">ARMAR</span></div></li>
+  <li><div class="num">3</div><div>Introduce el PIN de 4 dígitos</div></li>
+  <li><div class="num">4</div><div>Tienes <strong>2 minutos</strong> para salir — una cuenta atrás lo indica en pantalla</div></li>
+  <li><div class="num">5</div><div>Al llegar a cero la alarma queda activa</div></li>
+</ol>
+
+<h3>Desarmar la alarma</h3>
+<ol class="steps">
+  <li><div class="num">1</div><div>Al entrar en casa el sistema detecta movimiento y emite pitidos</div></li>
+  <li><div class="num">2</div><div>Tienes <strong>30 segundos</strong> para desarmar. Ve a la pantalla <strong>ALARMA</strong> y pulsa <span class="btn-demo grey">DESARMAR</span></div></li>
+  <li><div class="num">3</div><div>Introduce el PIN</div></li>
+</ol>
+
+<div class="callout alert">
+  <strong>Si no introduces el PIN a tiempo</strong>
+  La sirena suena y llega una notificación al móvil. Para silenciarla: pantalla de alerta roja → <strong>INTRODUCIR PIN</strong> → introduce el PIN.
+</div>
+
+
+<!-- SECCIÓN 3: INUNDACIÓN Y HUMO -->
+<h2><span class="icon">🚨</span> Alarmas automáticas</h2>
+
+<p>Estas alarmas <strong>no requieren que el sistema esté armado</strong>. Saltan solas en cualquier momento.</p>
+
+<h3>Inundación</h3>
+<p>Si el sensor de agua detecta humedad en el suelo:</p>
+<ul style="margin-left:20px; margin-bottom:12px;">
+  <li>Las <strong>válvulas de agua se cierran automáticamente</strong></li>
+  <li>Llega una notificación al móvil</li>
+  <li>La pantalla muestra alerta roja: <strong>INUNDACION</strong></li>
+</ul>
+<p>Para desactivar la alerta: pulsa <span class="btn-demo red">DESACTIVAR</span> e introduce el PIN.<br>
+Una vez solucionado el problema, abre el agua desde la pantalla <strong>RELÉS</strong>.</p>
+
+<h3>Humo / calor (cocina)</h3>
+<p>Si el detector de la cocina se activa:</p>
+<ul style="margin-left:20px; margin-bottom:12px;">
+  <li>La <strong>sirena suena automáticamente</strong></li>
+  <li>Llega una notificación al móvil</li>
+  <li>La pantalla muestra alerta roja: <strong>HUMO</strong></li>
+</ul>
+<p>Para desactivar: pulsa <span class="btn-demo red">DESACTIVAR</span> e introduce el PIN.</p>
+
+<div class="callout warn">
+  <strong>En caso de fuego real</strong>
+  Evacua primero. La alarma ya avisará sola. Llama al <strong>112</strong>.
+</div>
+
+
+<!-- SECCIÓN 4: AGUA -->
+<h2><span class="icon">💧</span> Agua</h2>
+
+<p>En la pantalla <strong>RELÉS</strong>, el <strong>panel verde grande</strong> en la parte inferior es la electroválvula de agua sanitaria.</p>
+
+<table>
+  <tr><th>Color del panel</th><th>Estado</th></tr>
+  <tr><td>Verde oscuro</td><td>Agua abierta — situación normal</td></tr>
+  <tr><td>Verde vivo</td><td>Agua abierta (relé activo)</td></tr>
+  <tr><td>Gris oscuro</td><td>Agua cerrada</td></tr>
+</table>
+
+<p>Pulsar el panel alterna entre abierto y cerrado.</p>
+
+<div class="callout info">
+  Tras una alerta de inundación las válvulas se cierran solas. Para reabrirlas hay que hacerlo manualmente desde este panel una vez solucionado el problema.
+</div>
+
+
+<!-- SECCIÓN 5: CALEFACCIÓN -->
+<h2><span class="icon">🌡</span> Calefacción</h2>
+
+<p>En la pantalla <strong>RELÉS</strong>, la zona central tiene tres modos de calefacción:</p>
+
+<table>
+  <tr><th>Botón</th><th>Qué hace</th></tr>
+  <tr>
+    <td><span class="btn-demo blue">MANUAL</span></td>
+    <td>Enciende la calefacción sin condiciones. Púlsalo de nuevo para apagarla.</td>
+  </tr>
+  <tr>
+    <td><span class="btn-demo blue">CONSIGNA</span></td>
+    <td>Mantiene la temperatura en el valor marcado. Ajusta la temperatura con el botón numérico a la derecha.</td>
+  </tr>
+  <tr>
+    <td><span class="btn-demo blue">PROGRAMA</span></td>
+    <td>Sigue el horario semanal configurado. Alterna entre temperatura CONFORT y ECO en bloques de 4 horas.</td>
+  </tr>
+</table>
+
+<p>El botón activo se ilumina en <strong>azul</strong>. Para apagar la calefacción pulsa el botón activo de nuevo.</p>
+
+
+<!-- SECCIÓN 6: CORTE DE LUZ -->
+<h2><span class="icon">⚡</span> Corte de luz</h2>
+
+<p>Si hay un corte de suministro eléctrico en casa llega una notificación al móvil. Cuando se restaura llega otra de confirmación.</p>
+
+<div class="callout ok">
+  <strong>No hace falta hacer nada</strong>
+  El sistema arranca automáticamente cuando vuelve la corriente.
+</div>
+
+
+<!-- SECCIÓN 7: NOTIFICACIONES -->
+<h2><span class="icon">🔔</span> Notificaciones en el móvil</h2>
+
+<p>La app <strong>Home Assistant</strong> en el móvil recibe alertas automáticas:</p>
+
+<div style="margin-top:16px;">
+  <div class="notif">
+    <div class="emoji">🚨</div>
+    <div><div class="title">INUNDACIÓN DETECTADA</div><div class="desc">Sensor de agua activo. Válvulas ya cerradas automáticamente.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">🔥</div>
+    <div><div class="title">ALARMA HUMO / CALOR</div><div class="desc">Detector cocina activo. Sirena encendida.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">🚨</div>
+    <div><div class="title">POSIBLE INTRUSIÓN</div><div class="desc">Movimiento detectado con alarma armada. Tienes 30 segundos para introducir el PIN.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">🔴</div>
+    <div><div class="title">ALARMA ACTIVADA</div><div class="desc">La alarma está sonando en casa.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">⚡</div>
+    <div><div class="title">CORTE DE LUZ</div><div class="desc">Sin alimentación eléctrica detectada.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">✅</div>
+    <div><div class="title">Luz restaurada</div><div class="desc">La corriente ha vuelto. El sistema funciona con normalidad.</div></div>
+  </div>
+  <div class="notif">
+    <div class="emoji">🛡️</div>
+    <div><div class="title">Alarma armada / desarmada</div><div class="desc">Confirmación cada vez que alguien arma o desarma el sistema.</div></div>
+  </div>
+</div>
+
+
+<!-- SECCIÓN 8: EMERGENCIAS -->
+<h2><span class="icon">🆘</span> Qué hacer en cada situación</h2>
+
+<table class="emerg">
+  <tr><th>Situación</th><th>Acción</th></tr>
+  <tr>
+    <td>Inundación</td>
+    <td>Las válvulas ya se cierran solas. Corta el paso de agua principal si es necesario y llama al propietario.</td>
+  </tr>
+  <tr>
+    <td>Humo / fuego</td>
+    <td>Evacua inmediatamente. La sirena y las notificaciones actúan solos. Llama al <strong>112</strong>.</td>
+  </tr>
+  <tr>
+    <td>Intrusión</td>
+    <td>No intervengas. La alarma suena y notifica al propietario automáticamente.</td>
+  </tr>
+  <tr>
+    <td>Alarma sonando sin motivo</td>
+    <td>Pantalla de alerta roja → <strong>INTRODUCIR PIN</strong> → introduce el PIN para silenciarla.</td>
+  </tr>
+  <tr>
+    <td>Sin agua tras una alerta</td>
+    <td>Pantalla <strong>RELÉS</strong> → panel verde <strong>AGUA</strong> → pulsar para abrir la válvula.</td>
+  </tr>
+</table>
+
+
+<div class="footer">
+  DOMMUS · Sistema de control del hogar · Guía de uso para el usuario
+</div>
+
+</body>
+</html>
