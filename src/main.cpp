@@ -943,6 +943,10 @@ static void build_tile_hist() {
     btn_hist[1]=make_big_btn(tile_sensors,"Presencia",  COL_RELAY_DIM,   8,280,65,cb_hist_pres,nullptr);
     btn_hist[2]=make_big_btn(tile_sensors,"Registro",   COL_RELAY_DIM,  88,280,65,cb_hist_log, nullptr);
     lbl_hist_tile_mem=centered_label(tile_sensors,"Flash: ...", &lv_font_montserrat_14, COL_MUTED, +148);
+    { size_t fu=LittleFS.usedBytes(), ft=LittleFS.totalBytes();
+      char mb[36]; snprintf(mb,sizeof(mb),"Flash: %d/%d KB (%d%%)",
+          (int)(fu/1024),(int)(ft/1024),ft>0?(int)(fu*100/ft):0);
+      lv_label_set_text(lbl_hist_tile_mem,mb); }
     hint_sensors=add_home_hint(tile_sensors,LV_ALIGN_RIGHT_MID,LV_SYMBOL_RIGHT " HOME");
 }
 
@@ -1111,8 +1115,7 @@ static void build_tile_relays() {
       lv_obj_center(l); }
 
     refresh_heat_ui();
-    hint_relays=add_home_hint(tile_relays,LV_ALIGN_TOP_LEFT,"HOME " LV_SYMBOL_LEFT);
-    lv_obj_align(hint_relays,LV_ALIGN_TOP_LEFT,12,35);
+    hint_relays=add_home_hint(tile_relays,LV_ALIGN_LEFT_MID,"HOME " LV_SYMBOL_LEFT);
 }
 
 // ── BUILD TILE ALARMA ────────────────────────────────────────
