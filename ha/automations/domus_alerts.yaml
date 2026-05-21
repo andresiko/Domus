@@ -1,0 +1,127 @@
+# DOMUS — Automatizaciones de alertas push
+# Coloca este archivo en: config/automations/domus_alerts.yaml
+# O copia cada bloque al editor visual de automatizaciones de HA.
+#
+# Prerequisito: app Home Assistant instalada en el móvil
+# y notificaciones habilitadas (Settings → Companion App → Notifications).
+# El nombre del servicio sigue el patrón: notify.mobile_app_<nombre_dispositivo>
+# Cámbialo por el tuyo (ver Developer Tools → Services → notify)
+
+- id: domus_alert_flood
+  alias: "DOMUS — Alerta inundación"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.inundacion
+      to: "on"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🚨 INUNDACIÓN DETECTADA"
+        message: "Sensor de inundación activo. Válvulas cerradas automáticamente."
+        data:
+          tag: domus_flood
+          importance: high
+
+- id: domus_alert_smoke
+  alias: "DOMUS — Alerta humo/calor"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.humo_calor
+      to: "on"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🔥 ALARMA HUMO/CALOR"
+        message: "Detector SFL-910 cocina activo. Sirena encendida."
+        data:
+          tag: domus_smoke
+          importance: high
+
+- id: domus_alert_intrusion
+  alias: "DOMUS — Alerta intrusión"
+  trigger:
+    - platform: state
+      entity_id: sensor.estado_alarma
+      to: "GRACE"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🚨 POSIBLE INTRUSIÓN"
+        message: "Movimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
+        data:
+          tag: domus_intrusion
+          importance: high
+
+- id: domus_alert_sounding
+  alias: "DOMUS — Alarma sonando"
+  trigger:
+    - platform: state
+      entity_id: sensor.estado_alarma
+      to: "SOUNDING"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🔴 ALARMA ACTIVADA"
+        message: "La alarma está sonando en casa."
+        data:
+          tag: domus_sounding
+          importance: high
+
+- id: domus_alert_power_cut
+  alias: "DOMUS — Corte de luz"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.red_electrica
+      to: "off"
+      for:
+        seconds: 10
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "⚡ CORTE DE LUZ"
+        message: "Sin alimentación 220VAC detectada en casa."
+        data:
+          tag: domus_power
+
+- id: domus_alert_power_restore
+  alias: "DOMUS — Luz restaurada"
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.red_electrica
+      to: "on"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "✅ Luz restaurada"
+        message: "La alimentación 220VAC ha vuelto."
+        data:
+          tag: domus_power
+
+- id: domus_alert_alarm_armed
+  alias: "DOMUS — Alarma armada"
+  trigger:
+    - platform: state
+      entity_id: sensor.estado_alarma
+      to: "ARMED"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🛡️ Alarma armada"
+        message: "Sistema de alarma activado."
+        data:
+          tag: domus_armed
+
+- id: domus_alert_alarm_disarmed
+  alias: "DOMUS — Alarma desarmada"
+  trigger:
+    - platform: state
+      entity_id: sensor.estado_alarma
+      to: "OFF"
+      from: "ARMED"
+  action:
+    - service: notify.mobile_app_tu_movil
+      data:
+        title: "🔓 Alarma desarmada"
+        message: "Sistema de alarma desactivado."
+        data:
+          tag: domus_armed

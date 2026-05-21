@@ -1,0 +1,136 @@
+# DOMUS — Entidades Home Assistant
+# Coloca este archivo en: config/packages/domus.yaml
+# Requiere en configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+
+mqtt:
+  # ── Switches (relés controlables) ──────────────────────────
+
+  switch:
+    - name: "Agua"
+      unique_id: domus_relay_agua
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      value_template: "{{ 'ON' if value_json.output1.value else 'OFF' }}"
+      state_on: "ON"
+      state_off: "OFF"
+      command_topic: "A6v3/30EDA03B1378/SET"
+      payload_on:  '{"output1":{"value":true}}'
+      payload_off: '{"output1":{"value":false}}'
+      icon: mdi:valve
+      device_class: switch
+
+    - name: "Sirena"
+      unique_id: domus_relay_sirena
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      value_template: "{{ 'ON' if value_json.output3.value else 'OFF' }}"
+      state_on: "ON"
+      state_off: "OFF"
+      command_topic: "A6v3/30EDA03B1378/SET"
+      payload_on:  '{"output3":{"value":true}}'
+      payload_off: '{"output3":{"value":false}}'
+      icon: mdi:alarm-bell
+
+    # Calefacción: solo lectura (la gestiona DOMUS, no la controles desde HA)
+    - name: "Calefaccion Relay"
+      unique_id: domus_relay_calef
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      value_template: "{{ 'ON' if value_json.output2.value else 'OFF' }}"
+      state_on: "ON"
+      state_off: "OFF"
+      command_topic: "A6v3/30EDA03B1378/SET"
+      payload_on:  '{"output2":{"value":true}}'
+      payload_off: '{"output2":{"value":false}}'
+      icon: mdi:radiator
+
+  # ── Sensores binarios (entradas A6v3) ──────────────────────
+
+  binary_sensor:
+    - name: "Inundacion"
+      unique_id: domus_sensor_flood
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      value_template: "{{ 'ON' if value_json.input1.value else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: moisture
+
+    - name: "Movimiento"
+      unique_id: domus_sensor_pir
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      # PIR lógica invertida: input4=false → detectado
+      value_template: "{{ 'ON' if not value_json.input4.value else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: motion
+
+    - name: "Humo Calor"
+      unique_id: domus_sensor_smoke
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      # SFL-910 lógica invertida: input5=false → alarma
+      value_template: "{{ 'ON' if not value_json.input5.value else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: smoke
+
+    - name: "Red Electrica"
+      unique_id: domus_sensor_power
+      state_topic: "A6v3/30EDA03B1378/STATE"
+      # input6=false → corte de red
+      value_template: "{{ 'ON' if value_json.input6.value else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: power
+
+    # ── Sensores DOMUS/status (publican la CrowPanel) ─────────
+
+    - name: "Alarma Activa"
+      unique_id: domus_alarm_active
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.alarm != 'OFF' else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: safety
+
+    - name: "Alarma Sonando"
+      unique_id: domus_alarm_sounding
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.alarm == 'SOUNDING' else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: sound
+
+  # ── Sensores de medida ─────────────────────────────────────
+
+  sensor:
+    - name: "Temperatura Interior"
+      unique_id: domus_temp_int
+      state_topic: "DOMUS/status"
+      value_template: "{{ value_json.temp_int | default(none) }}"
+      unit_of_measurement: "°C"
+      device_class: temperature
+      state_class: measurement
+
+    - name: "Humedad"
+      unique_id: domus_humidity
+      state_topic: "DOMUS/status"
+      value_template: "{{ value_json.humidity | default(none) }}"
+      unit_of_measurement: "%"
+      device_class: humidity
+      state_class: measurement
+
+    - name: "Estado Alarma"
+      unique_id: domus_alarm_state
+      state_topic: "DOMUS/status"
+      value_template: "{{ value_json.alarm }}"
+      icon: mdi:shield-home
+
+    - name: "Modo Calefaccion"
+      unique_id: domus_heat_mode
+      state_topic: "DOMUS/status"
+      value_template: >
+        {% set m = value_json.heat_mode | int %}
+        {% if m == 0 %}OFF
+        {% elif m == 1 %}Manual
+        {% elif m == 2 %}Consigna
+        {% else %}Programa{% endif %}
+      icon: mdi:thermostat

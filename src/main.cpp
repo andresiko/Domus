@@ -165,6 +165,8 @@ public:
     }
 } broker;
 
+static void mqtt_publish_status();  // forward declaration
+
 static void relay_set(int n, bool v) {
     char buf[64];
     snprintf(buf,64,"{\"output%d\":{\"value\":%s}}",n,v?"true":"false");
@@ -1926,7 +1928,7 @@ static void build_tile_settings() {
 // ── BUILD OVERLAY ALARMA CRÍTICA ─────────────────────────────
 static void cb_deactivate(lv_event_t *e) {
     if(intruder_active){ pin_for_arm=false; memset(pin_buf,0,5); pin_len=0; go_to(SCR_PIN); }
-    else { relay_set(3,false); critical_alert=false; alarm_state=alarm_armed?AS_ARMED:AS_OFF; go_to(SCR_TV); }
+    else { relay_set(3,false); critical_alert=false; alarm_state=alarm_armed?AS_ARMED:AS_OFF; mqtt_publish_status(); go_to(SCR_TV); }
 }
 static void build_scr_alarm() {
     scr_alarm=lv_obj_create(nullptr);
@@ -1945,8 +1947,8 @@ static void update_pin_dots() {
 }
 static void pin_check() {
     if(strncmp(pin_buf,cfg_pin,4)==0){
-        if(pin_for_arm){ alarm_state=AS_ARMING; alarm_armed=true; alarm_ts=millis(); arming_end_ms=alarm_ts+120000UL; start_beep_seq(1,100); lv_label_set_text(lbl_pin_msg,""); go_to(SCR_ARMING_SCR); }
-        else { alarm_state=AS_OFF; alarm_armed=false; intruder_active=false; critical_alert=false; beep_seq={}; siren_off_at=0; relay_set(3,false); log_event(EVT_ALARM_DISARM,1); lv_label_set_text(lbl_pin_msg,""); go_to(SCR_TV); }
+        if(pin_for_arm){ alarm_state=AS_ARMING; alarm_armed=true; alarm_ts=millis(); arming_end_ms=alarm_ts+120000UL; start_beep_seq(1,100); lv_label_set_text(lbl_pin_msg,""); mqtt_publish_status(); go_to(SCR_ARMING_SCR); }
+        else { alarm_state=AS_OFF; alarm_armed=false; intruder_active=false; critical_alert=false; beep_seq={}; siren_off_at=0; relay_set(3,false); log_event(EVT_ALARM_DISARM,1); lv_label_set_text(lbl_pin_msg,""); mqtt_publish_status(); go_to(SCR_TV); }
     } else { lv_label_set_text(lbl_pin_msg,"PIN incorrecto"); memset(pin_buf,0,5); pin_len=0; update_pin_dots(); }
 }
 static void cb_pin_key(lv_event_t *e) {
@@ -1986,7 +1988,7 @@ static void build_scr_pin() {
 // ── BUILD OVERLAY CUENTA ATRÁS ────────────────────────────────
 static void cb_arming_extend(lv_event_t *e) { arming_end_ms += 120000UL; }
 static void cb_arming_cancel(lv_event_t *e) {
-    alarm_state=AS_OFF; alarm_armed=false; beep_seq={}; siren_off_at=0; go_to(SCR_TV);
+    alarm_state=AS_OFF; alarm_armed=false; beep_seq={}; siren_off_at=0; mqtt_publish_status(); go_to(SCR_TV);
 }
 static void build_scr_arming() {
     scr_arming=lv_obj_create(nullptr);
@@ -2221,6 +2223,7 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_type, flood?"INUNDACION":"HUMO");
         lv_label_set_text(lbl_alarm_detail,flood?"Valvulas cerradas auto.":"Sirena activada");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"DESACTIVAR");
+        mqtt_publish_status();
         go_to(SCR_ALARM_CRIT);
     }
     if(alarm_state==AS_ARMED&&!a6v3.input[4]&&!intruder_active){
@@ -2229,6 +2232,7 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_type,"INTRUSION");
         lv_label_set_text(lbl_alarm_detail,"Introduce PIN para desarmar");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"INTRODUCIR PIN");
+        mqtt_publish_status();
         go_to(SCR_ALARM_CRIT);
     }
 }
@@ -2362,6 +2366,34 @@ static bool tuya_get_token() {
     }
     http.end(); return ok;
 }
+static void mqtt_publish_status() {
+    const char *as =
+        alarm_state==AS_OFF     ?"OFF"     :
+        alarm_state==AS_ARMING  ?"ARMING"  :
+        alarm_state==AS_ARMED   ?"ARMED"   :
+        alarm_state==AS_GRACE   ?"GRACE"   :"SOUNDING";
+    char buf[160];
+    if(isnan(tuya_temp_int))
+        snprintf(buf,sizeof(buf),
+            "{\"alarm\":\"%s\",\"heat_mode\":%d,\"heat_relay\":%s,"
+            "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
+            as,(int)heat_mode,a6v3.output[2]?"true":"false",
+            a6v3.input[1]?"true":"false",
+            a6v3.input[5]?"false":"true",
+            a6v3.input[6]?"true":"false");
+    else
+        snprintf(buf,sizeof(buf),
+            "{\"alarm\":\"%s\",\"temp_int\":%.1f,\"humidity\":%.0f,"
+            "\"heat_mode\":%d,\"heat_relay\":%s,"
+            "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
+            as,tuya_temp_int,isnan(tuya_humidity)?0.0f:tuya_humidity,
+            (int)heat_mode,a6v3.output[2]?"true":"false",
+            a6v3.input[1]?"true":"false",
+            a6v3.input[5]?"false":"true",
+            a6v3.input[6]?"true":"false");
+    broker.publish("DOMUS/status", std::string(buf));
+}
+
 static void fetch_tuya_temp() {
     if(!WiFi.isConnected()) return;
     tuya_last=millis();
@@ -2400,6 +2432,7 @@ static void fetch_tuya_temp() {
         }
     }
     http.end();
+    mqtt_publish_status();
 }
 
 // ── WEATHER FETCH ─────────────────────────────────────────────
@@ -2851,6 +2884,8 @@ void loop() {
     if(scr_change){ scr_change=false; do_switch(pend_scr); }
     if(millis()-wx_last  >30UL*60000UL) fetch_weather();
     if(millis()-tuya_last> 5UL*60000UL) fetch_tuya_temp();
+    { static unsigned long domus_pub_last=0;
+      if(millis()-domus_pub_last>=60000UL){ domus_pub_last=millis(); mqtt_publish_status(); } }
 
     if(millis()-last_status>=5000){
         last_status=millis();
