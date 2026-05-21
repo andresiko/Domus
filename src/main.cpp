@@ -275,6 +275,7 @@ static lv_obj_t *lbl_wx_forecast = nullptr;
 
 // Historial tile
 static lv_obj_t *btn_hist[3] = {}; // Temperatura, Presencia, Registro
+static lv_obj_t *lbl_hist_tile_mem = nullptr;
 
 // Relés
 static lv_obj_t *btn_agua_r=nullptr;
@@ -784,6 +785,7 @@ static void open_dial(DialMode mode) {
 
 // ── CALEFACCIÓN ───────────────────────────────────────────────
 static void refresh_heat_ui();
+static void check_heating_auto();
 
 static void heat_set_mode(HeatMode m) {
     if (heat_mode == m) {
@@ -792,10 +794,12 @@ static void heat_set_mode(HeatMode m) {
     } else {
         heat_mode = m;
         if (m == HM_MANUAL) relay_set(2, true);
+        else relay_set(2, false); // modo auto: apagar relé y dejar que check_heating_auto evalúe
     }
     log_event(EVT_HEAT_MODE, (uint8_t)heat_mode);
     prefs.begin("domus",false); prefs.putInt("heat_mode",(int)heat_mode); prefs.end();
     refresh_heat_ui();
+    check_heating_auto();
 }
 
 static void check_heating_auto() {
@@ -938,12 +942,58 @@ static void build_tile_hist() {
     btn_hist[0]=make_big_btn(tile_sensors,"Temperatura",COL_RELAY_DIM, -72,280,65,cb_hist_temp,nullptr);
     btn_hist[1]=make_big_btn(tile_sensors,"Presencia",  COL_RELAY_DIM,   8,280,65,cb_hist_pres,nullptr);
     btn_hist[2]=make_big_btn(tile_sensors,"Registro",   COL_RELAY_DIM,  88,280,65,cb_hist_log, nullptr);
+    lbl_hist_tile_mem=centered_label(tile_sensors,"Flash: ...", &lv_font_montserrat_14, COL_MUTED, +148);
     hint_sensors=add_home_hint(tile_sensors,LV_ALIGN_RIGHT_MID,LV_SYMBOL_RIGHT " HOME");
 }
 
 // ── BUILD TILE RELÉS ─────────────────────────────────────────
 static void cb_agua(lv_event_t *e)        { if(swipe_blocked()) return; relay_set(1,!a6v3.output[1]); }
-static void cb_sirena(lv_event_t *e)      { if(swipe_blocked()) return; relay_set(3,!a6v3.output[3]); }
+
+static lv_obj_t *siren_confirm_panel = nullptr;
+static void siren_confirm_close() {
+    if(!siren_confirm_panel) return;
+    lv_obj_delete(siren_confirm_panel); siren_confirm_panel = nullptr;
+    lv_obj_clear_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
+}
+static void cb_siren_yes(lv_event_t *e) { relay_set(3, true);  siren_confirm_close(); }
+static void cb_siren_no (lv_event_t *e) {                       siren_confirm_close(); }
+
+static void cb_sirena(lv_event_t *e) {
+    if(swipe_blocked()) return;
+    if(a6v3.output[3]) { relay_set(3, false); return; } // apagar: sin confirmación
+    if(siren_confirm_panel) return;
+    lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE);
+    siren_confirm_panel = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(siren_confirm_panel, 300, 160);
+    lv_obj_center(siren_confirm_panel);
+    lv_obj_set_style_bg_color(siren_confirm_panel, lv_color_hex(COL_CARD), 0);
+    lv_obj_set_style_bg_opa(siren_confirm_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(siren_confirm_panel, 16, 0);
+    lv_obj_set_style_border_color(siren_confirm_panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(siren_confirm_panel, 1, 0);
+    lv_obj_set_style_pad_all(siren_confirm_panel, 0, 0);
+    lv_obj_clear_flag(siren_confirm_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *lbl=lv_label_create(siren_confirm_panel);
+    lv_label_set_text(lbl,"Activar sirena?");
+    lv_obj_set_style_text_font(lbl,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(lbl,lv_color_hex(COL_TEXT),0);
+    lv_obj_align(lbl,LV_ALIGN_TOP_MID,0,22);
+    auto mk=[&](const char *txt, int x, uint32_t col, lv_event_cb_t cb){
+        lv_obj_t *b=lv_obj_create(siren_confirm_panel);
+        lv_obj_set_size(b,120,52);
+        lv_obj_align(b,x<0?LV_ALIGN_BOTTOM_LEFT:LV_ALIGN_BOTTOM_RIGHT,x<0?16:-16,-16);
+        lv_obj_set_style_bg_color(b,lv_color_hex(col),0);
+        lv_obj_set_style_radius(b,10,0); lv_obj_set_style_border_width(b,0,0);
+        lv_obj_set_style_pad_all(b,0,0);
+        lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,nullptr);
+        lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,txt);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l);
+    };
+    mk("ACTIVAR", -1, COL_ALERT, cb_siren_yes);
+    mk("CANCELAR",+1, COL_OFF,   cb_siren_no);
+}
 static void cb_hm_manual(lv_event_t *e)   { if(swipe_blocked()) return; heat_set_mode(HM_MANUAL); }
 static void cb_hm_consigna(lv_event_t *e) { if(swipe_blocked()) return; heat_set_mode(HM_CONSIGNA); }
 static void cb_hm_prog(lv_event_t *e) {
@@ -952,10 +1002,12 @@ static void cb_hm_prog(lv_event_t *e) {
         heat_mode = HM_OFF; relay_set(2, false);
     } else {
         heat_mode = HM_PROGRAMA;
+        relay_set(2, false); // reset; check_heating_auto decidirá
     }
     log_event(EVT_HEAT_MODE, (uint8_t)heat_mode);
     prefs.begin("domus",false); prefs.putInt("heat_mode",(int)heat_mode); prefs.end();
     refresh_heat_ui();
+    check_heating_auto();
     if(heat_mode == HM_PROGRAMA) go_to(SCR_PROG);
 }
 static void cb_setpoint_btn(lv_event_t *e) {
@@ -1876,8 +1928,6 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_anim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_anim);
 
-    lbl_settings_mem=centered_label(tile_settings,"Flash: ...", &lv_font_montserrat_14, COL_MUTED, +146);
-
     hint_settings=add_home_hint(tile_settings,LV_ALIGN_TOP_MID,LV_SYMBOL_UP " HOME");
 }
 
@@ -2197,11 +2247,11 @@ static void do_switch(Screen s) {
         case SCR_TV:
             update_home();
             update_sensors_tile();
-            if(lbl_settings_mem){
+            if(lbl_hist_tile_mem){
                 size_t fu=LittleFS.usedBytes(), ft=LittleFS.totalBytes();
                 char mb[36]; snprintf(mb,sizeof(mb),"Flash: %d/%d KB (%d%%)",
                     (int)(fu/1024),(int)(ft/1024),ft>0?(int)(fu*100/ft):0);
-                lv_label_set_text(lbl_settings_mem,mb);
+                lv_label_set_text(lbl_hist_tile_mem,mb);
             }
             update_relays_tile();
             update_alarm_tile();
