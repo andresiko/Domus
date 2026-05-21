@@ -1030,62 +1030,42 @@ static void refresh_heat_ui() {
 static void build_tile_relays() {
     bg(tile_relays);
 
-    btn_agua_r=make_big_btn(tile_relays,"AGUA",COL_OFF,-140,260,65,cb_agua,nullptr);
+    // Layout plano: 5 botones h=50, gap=8px, con etiqueta "CALEFACCION" entre AGUA y MANUAL
+    // y_offsets (desde centro): AGUA=-130, label=-91, MANUAL=-52, CONSIGNA/SP=+6, PROG=+64, SIRENA=+122
+    btn_agua_r=make_big_btn(tile_relays,"AGUA",COL_OFF,-130,260,50,cb_agua,nullptr);
 
-    lv_obj_t *heat_box=lv_obj_create(tile_relays);
-    lv_obj_set_size(heat_box,280,200);
-    lv_obj_align(heat_box,LV_ALIGN_CENTER,0,0);
-    lv_obj_set_style_bg_color(heat_box,lv_color_hex(COL_BG),0);
-    lv_obj_set_style_bg_opa(heat_box,LV_OPA_COVER,0);
-    lv_obj_set_style_border_color(heat_box,lv_color_hex(0x303030),0);
-    lv_obj_set_style_border_width(heat_box,1,0);
-    lv_obj_set_style_radius(heat_box,16,0);
-    lv_obj_set_style_pad_all(heat_box,0,0);
-    lv_obj_clear_flag(heat_box,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(heat_box,LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(heat_box,LV_OBJ_FLAG_EVENT_BUBBLE);
+    { lv_obj_t *l=lv_label_create(tile_relays);
+      lv_label_set_text(l,"CALEFACCION");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
+      lv_obj_align(l,LV_ALIGN_CENTER,0,-91); }
 
-    lv_obj_t *lbl_htitle=lv_label_create(heat_box);
-    lv_label_set_text(lbl_htitle,"CALEFACCION");
-    lv_obj_set_style_text_font(lbl_htitle,&lv_font_montserrat_14,0);
-    lv_obj_set_style_text_color(lbl_htitle,lv_color_hex(COL_MUTED),0);
-    lv_obj_align(lbl_htitle,LV_ALIGN_TOP_MID,0,7);
+    auto mk_hm=[](lv_obj_t *par, int y, int x, int w, lv_event_cb_t cb, const char *txt) -> lv_obj_t* {
+        lv_obj_t *b=lv_obj_create(par);
+        lv_obj_set_size(b,w,50);
+        lv_obj_align(b,LV_ALIGN_CENTER,x,y);
+        lv_obj_set_style_bg_color(b,lv_color_hex(COL_OFF),0);
+        lv_obj_set_style_radius(b,8,0);
+        lv_obj_set_style_border_width(b,0,0);
+        lv_obj_set_style_pad_all(b,0,0);
+        lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+        if(cb) lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,nullptr);
+        lv_obj_t *l=lv_label_create(b);
+        lv_label_set_text(l,txt);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+        lv_obj_center(l);
+        return b;
+    };
 
-    btn_hm[0]=lv_obj_create(heat_box);
-    lv_obj_set_size(btn_hm[0],260,44);
-    lv_obj_align(btn_hm[0],LV_ALIGN_CENTER,0,-50);
-    lv_obj_set_style_bg_color(btn_hm[0],lv_color_hex(COL_OFF),0);
-    lv_obj_set_style_radius(btn_hm[0],8,0);
-    lv_obj_set_style_border_width(btn_hm[0],0,0);
-    lv_obj_set_style_pad_all(btn_hm[0],0,0);
-    lv_obj_clear_flag(btn_hm[0],LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(btn_hm[0],LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_hm[0],cb_hm_manual,LV_EVENT_CLICKED,nullptr);
-    { lv_obj_t *l=lv_label_create(btn_hm[0]);
-      lv_label_set_text(l,"MANUAL");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
-      lv_obj_center(l); }
+    btn_hm[0]=mk_hm(tile_relays,-52, 0,260,cb_hm_manual,  "MANUAL");
+    btn_hm[1]=mk_hm(tile_relays, +6,-44,170,cb_hm_consigna,"CONSIGNA");
+    btn_hm[2]=mk_hm(tile_relays,+64, 0,260,cb_hm_prog,    "PROGRAMA");
 
-    btn_hm[1]=lv_obj_create(heat_box);
-    lv_obj_set_size(btn_hm[1],170,44);
-    lv_obj_align(btn_hm[1],LV_ALIGN_CENTER,-44,0);
-    lv_obj_set_style_bg_color(btn_hm[1],lv_color_hex(COL_OFF),0);
-    lv_obj_set_style_radius(btn_hm[1],8,0);
-    lv_obj_set_style_border_width(btn_hm[1],0,0);
-    lv_obj_set_style_pad_all(btn_hm[1],0,0);
-    lv_obj_clear_flag(btn_hm[1],LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(btn_hm[1],LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_hm[1],cb_hm_consigna,LV_EVENT_CLICKED,nullptr);
-    { lv_obj_t *l=lv_label_create(btn_hm[1]);
-      lv_label_set_text(l,"CONSIGNA");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
-      lv_obj_center(l); }
-
-    btn_setpoint=lv_obj_create(heat_box);
-    lv_obj_set_size(btn_setpoint,82,44);
-    lv_obj_align(btn_setpoint,LV_ALIGN_CENTER,89,0);
+    btn_setpoint=lv_obj_create(tile_relays);
+    lv_obj_set_size(btn_setpoint,82,50);
+    lv_obj_align(btn_setpoint,LV_ALIGN_CENTER,+89,+6);
     lv_obj_set_style_bg_color(btn_setpoint,lv_color_hex(COL_CARD),0);
     lv_obj_set_style_radius(btn_setpoint,8,0);
     lv_obj_set_style_border_width(btn_setpoint,1,0);
@@ -1100,23 +1080,7 @@ static void build_tile_relays() {
     lv_obj_center(lbl_setpoint);
     update_setpoint_btn();
 
-    btn_hm[2]=lv_obj_create(heat_box);
-    lv_obj_set_size(btn_hm[2],260,44);
-    lv_obj_align(btn_hm[2],LV_ALIGN_CENTER,0,50);
-    lv_obj_set_style_bg_color(btn_hm[2],lv_color_hex(COL_OFF),0);
-    lv_obj_set_style_radius(btn_hm[2],8,0);
-    lv_obj_set_style_border_width(btn_hm[2],0,0);
-    lv_obj_set_style_pad_all(btn_hm[2],0,0);
-    lv_obj_clear_flag(btn_hm[2],LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(btn_hm[2],LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(btn_hm[2],cb_hm_prog,LV_EVENT_CLICKED,nullptr);
-    { lv_obj_t *l=lv_label_create(btn_hm[2]);
-      lv_label_set_text(l,"PROGRAMA");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
-      lv_obj_center(l); }
-
-    btn_sirena_r=make_big_btn(tile_relays,"SIRENA",COL_OFF,140,260,65,cb_sirena,nullptr);
+    btn_sirena_r=make_big_btn(tile_relays,"SIRENA",COL_OFF,+122,260,50,cb_sirena,nullptr);
 
     refresh_heat_ui();
     hint_relays=add_home_hint(tile_relays,LV_ALIGN_LEFT_MID,"HOME " LV_SYMBOL_LEFT);
