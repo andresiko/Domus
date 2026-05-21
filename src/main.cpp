@@ -1030,19 +1030,32 @@ static void refresh_heat_ui() {
 static void build_tile_relays() {
     bg(tile_relays);
 
-    // Layout plano: 5 botones h=50, gap=8px, con etiqueta "CALEFACCION" entre AGUA y MANUAL
-    // y_offsets (desde centro): AGUA=-130, label=-91, MANUAL=-52, CONSIGNA/SP=+6, PROG=+64, SIRENA=+122
-    btn_agua_r=make_big_btn(tile_relays,"AGUA",COL_OFF,-130,260,50,cb_agua,nullptr);
+    // SIRENA — cajetín superior, ancho completo, clickable
+    btn_sirena_r=lv_obj_create(tile_relays);
+    lv_obj_set_pos(btn_sirena_r,0,0);
+    lv_obj_set_size(btn_sirena_r,480,90);
+    lv_obj_set_style_radius(btn_sirena_r,0,0);
+    lv_obj_set_style_bg_color(btn_sirena_r,lv_color_hex(COL_ZONE_ALARM),0);
+    lv_obj_set_style_border_width(btn_sirena_r,0,0);
+    lv_obj_set_style_pad_all(btn_sirena_r,0,0);
+    lv_obj_clear_flag(btn_sirena_r,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn_sirena_r,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_sirena_r,cb_sirena,LV_EVENT_CLICKED,nullptr);
+    { lv_obj_t *l=lv_label_create(btn_sirena_r);
+      lv_label_set_text(l,"SIRENA");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+      lv_obj_center(l); }
 
     { lv_obj_t *l=lv_label_create(tile_relays);
       lv_label_set_text(l,"CALEFACCION");
       lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
       lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
-      lv_obj_align(l,LV_ALIGN_CENTER,0,-91); }
+      lv_obj_align(l,LV_ALIGN_CENTER,0,-128); }
 
     auto mk_hm=[](lv_obj_t *par, int y, int x, int w, lv_event_cb_t cb, const char *txt) -> lv_obj_t* {
         lv_obj_t *b=lv_obj_create(par);
-        lv_obj_set_size(b,w,50);
+        lv_obj_set_size(b,w,65);
         lv_obj_align(b,LV_ALIGN_CENTER,x,y);
         lv_obj_set_style_bg_color(b,lv_color_hex(COL_OFF),0);
         lv_obj_set_style_radius(b,8,0);
@@ -1059,13 +1072,13 @@ static void build_tile_relays() {
         return b;
     };
 
-    btn_hm[0]=mk_hm(tile_relays,-52, 0,260,cb_hm_manual,  "MANUAL");
-    btn_hm[1]=mk_hm(tile_relays, +6,-44,170,cb_hm_consigna,"CONSIGNA");
-    btn_hm[2]=mk_hm(tile_relays,+64, 0,260,cb_hm_prog,    "PROGRAMA");
+    btn_hm[0]=mk_hm(tile_relays,-73,  0,260,cb_hm_manual,  "MANUAL");
+    btn_hm[1]=mk_hm(tile_relays,  0,-44,170,cb_hm_consigna,"CONSIGNA");
+    btn_hm[2]=mk_hm(tile_relays,+73,  0,260,cb_hm_prog,    "PROGRAMA");
 
     btn_setpoint=lv_obj_create(tile_relays);
-    lv_obj_set_size(btn_setpoint,82,50);
-    lv_obj_align(btn_setpoint,LV_ALIGN_CENTER,+89,+6);
+    lv_obj_set_size(btn_setpoint,82,65);
+    lv_obj_align(btn_setpoint,LV_ALIGN_CENTER,+89,0);
     lv_obj_set_style_bg_color(btn_setpoint,lv_color_hex(COL_CARD),0);
     lv_obj_set_style_radius(btn_setpoint,8,0);
     lv_obj_set_style_border_width(btn_setpoint,1,0);
@@ -1080,10 +1093,26 @@ static void build_tile_relays() {
     lv_obj_center(lbl_setpoint);
     update_setpoint_btn();
 
-    btn_sirena_r=make_big_btn(tile_relays,"SIRENA",COL_OFF,+122,260,50,cb_sirena,nullptr);
+    // AGUA — cajetín inferior, ancho completo, clickable
+    btn_agua_r=lv_obj_create(tile_relays);
+    lv_obj_set_pos(btn_agua_r,0,390);
+    lv_obj_set_size(btn_agua_r,480,90);
+    lv_obj_set_style_radius(btn_agua_r,0,0);
+    lv_obj_set_style_bg_color(btn_agua_r,lv_color_hex(COL_ZONE_SET),0);
+    lv_obj_set_style_border_width(btn_agua_r,0,0);
+    lv_obj_set_style_pad_all(btn_agua_r,0,0);
+    lv_obj_clear_flag(btn_agua_r,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn_agua_r,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn_agua_r,cb_agua,LV_EVENT_CLICKED,nullptr);
+    { lv_obj_t *l=lv_label_create(btn_agua_r);
+      lv_label_set_text(l,"AGUA");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+      lv_obj_center(l); }
 
     refresh_heat_ui();
-    hint_relays=add_home_hint(tile_relays,LV_ALIGN_LEFT_MID,"HOME " LV_SYMBOL_LEFT);
+    hint_relays=add_home_hint(tile_relays,LV_ALIGN_TOP_LEFT,"HOME " LV_SYMBOL_LEFT);
+    lv_obj_align(hint_relays,LV_ALIGN_TOP_LEFT,12,35);
 }
 
 // ── BUILD TILE ALARMA ────────────────────────────────────────
@@ -1095,7 +1124,7 @@ static void build_tile_alarm() {
     bg(tile_alarm);
     centered_label(tile_alarm,"ALARMA INTRUSION",&lv_font_montserrat_20,COL_TEXT,-160);
     lbl_arm_state=centered_label(tile_alarm,"DESARMADA",&lv_font_montserrat_40,COL_MUTED,-60);
-    btn_arm=make_big_btn(tile_alarm,"ARMAR",COL_OFF,60,240,70,cb_go_pin,nullptr);
+    btn_arm=make_big_btn(tile_alarm,"ARMAR",COL_RELAY_DIM,60,240,70,cb_go_pin,nullptr);
     hint_alarm=add_home_hint(tile_alarm,LV_ALIGN_BOTTOM_MID,"HOME " LV_SYMBOL_DOWN);
 }
 
@@ -1862,7 +1891,7 @@ static void build_tile_settings() {
     lbl_broker_status=centered_label(tile_settings,"Broker: sin conexion",&lv_font_montserrat_14,COL_ALERT,-108);
 
     // 5 píldoras iguales: 260×46px, gap=8px → total 270px centrado
-    btn_settings_br=make_big_btn(tile_settings,"",COL_OFF,-70,260,46,cb_open_brightness,nullptr);
+    btn_settings_br=make_big_btn(tile_settings,"",COL_RELAY_DIM,-70,260,46,cb_open_brightness,nullptr);
     lv_obj_t *btn_br=btn_settings_br;
     lbl_cfg_brightness=lv_label_create(btn_br);
     char b1[24]; snprintf(b1,sizeof(b1),"Brillo: %d",cfg_brightness);
@@ -1871,7 +1900,7 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_brightness,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_brightness);
 
-    btn_settings_dim=make_big_btn(tile_settings,"",COL_OFF,-16,260,46,cb_open_dim,nullptr);
+    btn_settings_dim=make_big_btn(tile_settings,"",COL_RELAY_DIM,-16,260,46,cb_open_dim,nullptr);
     lv_obj_t *btn_dim=btn_settings_dim;
     lbl_cfg_dim=lv_label_create(btn_dim);
     char b2[32];
@@ -1882,9 +1911,9 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_dim,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_dim);
 
-    btn_settings_pin=make_big_btn(tile_settings,"Cambiar PIN",COL_OFF,+38,260,46,cb_open_change_pin,nullptr);
+    btn_settings_pin=make_big_btn(tile_settings,"Cambiar PIN",COL_RELAY_DIM,+38,260,46,cb_open_change_pin,nullptr);
 
-    btn_settings_anim=make_big_btn(tile_settings,"",COL_OFF,+92,260,46,cb_cycle_anim,nullptr);
+    btn_settings_anim=make_big_btn(tile_settings,"",COL_RELAY_DIM,+92,260,46,cb_cycle_anim,nullptr);
     lv_obj_t *btn_an=btn_settings_anim;
     lbl_cfg_anim=lv_label_create(btn_an);
     lv_label_set_text(lbl_cfg_anim,"Anim: Ninguna");
@@ -2117,8 +2146,8 @@ static void update_home() {
 }
 static void update_sensors_tile() { /* sensors tile replaced by hist tile */ }
 static void update_relays_tile() {
-    if(btn_agua_r)   lv_obj_set_style_bg_color(btn_agua_r,  lv_color_hex(a6v3.output[1]?COL_OK:COL_OFF),0);
-    if(btn_sirena_r) lv_obj_set_style_bg_color(btn_sirena_r,lv_color_hex(a6v3.output[3]?COL_ALERT:COL_OFF),0);
+    if(btn_agua_r)   lv_obj_set_style_bg_color(btn_agua_r,  lv_color_hex(a6v3.output[1]?COL_OK:COL_ZONE_SET),0);
+    if(btn_sirena_r) lv_obj_set_style_bg_color(btn_sirena_r,lv_color_hex(a6v3.output[3]?COL_ALERT:COL_ZONE_ALARM),0);
     refresh_heat_ui();
 }
 static void update_alarm_tile() {
@@ -2132,7 +2161,7 @@ static void update_alarm_tile() {
         lv_label_set_text(lbl_arm_state,"DESARMADA");
         lv_obj_set_style_text_color(lbl_arm_state,lv_color_hex(COL_MUTED),0);
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_arm,0),"ARMAR");
-        lv_obj_set_style_bg_color(btn_arm,lv_color_hex(COL_OFF),0);
+        lv_obj_set_style_bg_color(btn_arm,lv_color_hex(COL_RELAY_DIM),0);
     }
 }
 static void update_weather_display() {
