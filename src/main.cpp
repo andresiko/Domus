@@ -139,6 +139,7 @@ static unsigned long tuya_last      = 0;
 #define MQTT_SET   "A6v3/30EDA03B1378/SET"
 static unsigned long mqtt_last_activity  = 0;
 static time_t        mqtt_last_conn_epoch = 0;
+static time_t        domus_pub_epoch      = 0;
 
 class DomusBroker : public sMQTTBroker {
 public:
@@ -2196,7 +2197,15 @@ static void update_broker_status() {
     }
     if(lbl_broker_status) {
         if(online) {
-            lv_label_set_text(lbl_broker_status,"Broker: Conectado");
+            char buf[48];
+            if(domus_pub_epoch > 0) {
+                struct tm *t = localtime(&domus_pub_epoch);
+                snprintf(buf,sizeof(buf),"Broker OK  |  pub %02d:%02d:%02d",
+                    t->tm_hour, t->tm_min, t->tm_sec);
+            } else {
+                snprintf(buf,sizeof(buf),"Broker: Conectado");
+            }
+            lv_label_set_text(lbl_broker_status, buf);
             lv_obj_set_style_text_color(lbl_broker_status,lv_color_hex(COL_OK),0);
         } else {
             char buf[48];
@@ -2392,6 +2401,8 @@ static void mqtt_publish_status() {
             a6v3.input[5]?"false":"true",
             a6v3.input[6]?"true":"false");
     broker.publish("DOMUS/status", std::string(buf));
+    time(&domus_pub_epoch);
+    Serial.printf("[DOMUS/status] %s\n", buf);
 }
 
 static void fetch_tuya_temp() {
