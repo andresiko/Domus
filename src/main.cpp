@@ -60,7 +60,7 @@ enum HeatMode { HM_OFF, HM_MANUAL, HM_CONSIGNA, HM_PROGRAMA };
 static HeatMode heat_mode     = HM_OFF;
 static int      heat_setpoint = 20;
 static int      cfg_eco_sp    = 16;
-static uint8_t  cfg_prog[7]   = {};  // bit r = block r activo (CONFORT) para wday
+static uint64_t cfg_prog[7]   = {};  // bit r = slot r activo (30min), 48 slots/día
 static float    tuya_temp_int = NAN;
 static float    tuya_humidity = NAN;
 
@@ -296,7 +296,7 @@ static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_
 
 // Programa calefacción
 static lv_obj_t           *scr_prog      = nullptr;
-static lv_obj_t           *prog_cells[7][6] = {};
+static lv_obj_t           *prog_cells[7][48] = {};
 static lv_obj_t           *lbl_eco_sp    = nullptr;
 
 // Graph
@@ -816,8 +816,8 @@ static void check_heating_auto() {
         time_t now = time(NULL);
         if(now < 1000000000L) return;
         struct tm t; localtime_r(&now, &t);
-        int block = t.tm_hour / 4; // 6 bloques de 4h (0..5)
-        bool confort = (cfg_prog[t.tm_wday] >> block) & 1;
+        int block = t.tm_hour * 2 + t.tm_min / 30; // 48 slots de 30min (0..47)
+        bool confort = (cfg_prog[t.tm_wday] >> block) & 1ULL;
         float target = confort ? (float)heat_setpoint : (float)cfg_eco_sp;
         const float hyst = 0.5f;
         if(tuya_temp_int < target - hyst && !a6v3.output[2]) relay_set(2, true);
@@ -1776,104 +1776,128 @@ static void build_scr_hist_menu() {
 
 // ── BUILD SCREEN PROGRAMA ────────────────────────────────────
 static void cb_prog_cell(lv_event_t *e) {
-    uint8_t data = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
-    uint8_t col = data >> 4;
-    uint8_t row = data & 0x0F;
+    uint16_t data = (uint16_t)(uintptr_t)lv_event_get_user_data(e);
+    uint8_t col = data >> 6;
+    uint8_t row = data & 0x3F;
     int wday = (col + 1) % 7;
-    cfg_prog[wday] ^= (1 << row);
-    bool on = (cfg_prog[wday] >> row) & 1;
+    cfg_prog[wday] ^= (1ULL << row);
+    bool on = (cfg_prog[wday] >> row) & 1ULL;
     if(prog_cells[col][row])
         lv_obj_set_style_bg_color(prog_cells[col][row], lv_color_hex(on ? COL_RELAY_DIM : COL_OFF), 0);
     Preferences p; p.begin("heat", false);
     char k[8]; snprintf(k, sizeof(k), "prog%d", wday);
-    p.putInt(k, cfg_prog[wday]);
+    p.putULong64(k, cfg_prog[wday]);
     p.end();
 }
 static void cb_eco_minus(lv_event_t *e) {
     if(cfg_eco_sp > 10) cfg_eco_sp--;
-    if(lbl_eco_sp){ char b[14]; snprintf(b,sizeof(b),"ECO: %d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
+    if(lbl_eco_sp){ char b[8]; snprintf(b,sizeof(b),"%d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
     Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
 }
 static void cb_eco_plus(lv_event_t *e) {
     if(cfg_eco_sp < heat_setpoint - 1) cfg_eco_sp++;
-    if(lbl_eco_sp){ char b[14]; snprintf(b,sizeof(b),"ECO: %d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
+    if(lbl_eco_sp){ char b[8]; snprintf(b,sizeof(b),"%d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
     Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
 }
 static void cb_prog_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 static void build_scr_prog() {
     scr_prog = lv_obj_create(nullptr); bg(scr_prog);
-    centered_label(scr_prog, "PROGRAMA", &lv_font_montserrat_20, COL_TEXT, -210);
+
+    // Layout (px absolutos, pantalla 480×480):
+    //  y=  8..36  título
+    //  y= 40..60  cabeceras días (fijas)
+    //  y= 62..344 grid scrollable (282px)
+    //  y=352..406 controles temperatura
+    //  y=414..464 SALIR
 
     static const char *DAYS[7] = {"L","M","X","J","V","S","D"};
-    static const char *BLKLBLS[6] = {"00","04","08","12","16","20"};
+    const int LABEL_W=46;  // columna hora
+    const int CELL_W =61;  // ancho columna día
+    const int ROW_H  =26;  // alto fila 30min
+    const int NROWS  =48;  // slots por día
+    const int SCROLL_Y=62, SCROLL_H=282;
 
-    const int CELL_W=50, CELL_H=36;
-    const int GX=58, GY=76;   // origen grid
-    const int COL_W=52, ROW_H=38;
+    // Título
+    { lv_obj_t *l=lv_label_create(scr_prog);
+      lv_label_set_text(l,"PROGRAMA");
+      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
+      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+      lv_obj_align(l,LV_ALIGN_TOP_MID,0,10); }
 
-    // Cabeceras días
+    // Cabeceras días (fijas, alineadas con columnas del grid)
     for(int c=0;c<7;c++){
         lv_obj_t *l=lv_label_create(scr_prog);
         lv_label_set_text(l, DAYS[c]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
-        lv_obj_set_pos(l, GX+c*COL_W+20, 57);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
+        lv_obj_set_pos(l, LABEL_W + c*CELL_W + 24, 42);
     }
-    // Etiquetas bloques (horas)
-    for(int r=0;r<6;r++){
-        lv_obj_t *l=lv_label_create(scr_prog);
-        lv_label_set_text(l, BLKLBLS[r]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(COL_MUTED), 0);
-        lv_obj_set_pos(l, 8, GY+r*ROW_H+12);
-    }
-    // Celdas grid 7×6
-    for(int c=0;c<7;c++){
-        int wday=(c+1)%7;
-        for(int r=0;r<6;r++){
-            bool on=(cfg_prog[wday]>>r)&1;
-            lv_obj_t *cell=lv_obj_create(scr_prog);
-            lv_obj_set_size(cell, CELL_W, CELL_H);
-            lv_obj_set_pos(cell, GX+c*COL_W+1, GY+r*ROW_H+1);
+
+    // Contenedor scrollable (solo Y)
+    lv_obj_t *sc = lv_obj_create(scr_prog);
+    lv_obj_set_pos(sc, 0, SCROLL_Y);
+    lv_obj_set_size(sc, 480, SCROLL_H);
+    lv_obj_set_style_bg_color(sc, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_border_width(sc, 0, 0);
+    lv_obj_set_style_pad_all(sc, 0, 0);
+    lv_obj_set_style_radius(sc, 0, 0);
+    lv_obj_set_scroll_dir(sc, LV_DIR_VER);
+    lv_obj_clear_flag(sc, LV_OBJ_FLAG_SCROLL_ELASTIC);
+
+    // Filas grid: 48 × ROW_H
+    for(int r=0;r<NROWS;r++){
+        int ry = r * ROW_H;
+        // Etiqueta hora (HH:MM)
+        { lv_obj_t *l=lv_label_create(sc);
+          char hbuf[6]; snprintf(hbuf,sizeof(hbuf),"%02d:%02d",(r/2),(r%2)*30);
+          lv_label_set_text(l,hbuf);
+          lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
+          lv_obj_set_style_text_color(l,lv_color_hex(COL_MUTED),0);
+          lv_obj_set_pos(l, 2, ry+5); }
+        // 7 celdas
+        for(int c=0;c<7;c++){
+            int wday=(c+1)%7;
+            bool on=(cfg_prog[wday]>>r)&1ULL;
+            lv_obj_t *cell=lv_obj_create(sc);
+            lv_obj_set_size(cell, CELL_W-2, ROW_H-2);
+            lv_obj_set_pos(cell, LABEL_W + c*CELL_W + 1, ry+1);
             lv_obj_set_style_bg_color(cell, lv_color_hex(on?COL_RELAY_DIM:COL_OFF), 0);
-            lv_obj_set_style_radius(cell, 4, 0);
+            lv_obj_set_style_radius(cell, 3, 0);
             lv_obj_set_style_border_width(cell, 0, 0);
             lv_obj_set_style_pad_all(cell, 0, 0);
             lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_add_event_cb(cell, cb_prog_cell, LV_EVENT_CLICKED, (void*)(uintptr_t)((uint8_t)((c<<4)|r)));
+            lv_obj_add_event_cb(cell, cb_prog_cell, LV_EVENT_CLICKED,
+                (void*)(uintptr_t)((uint16_t)((c<<6)|r)));
             prog_cells[c][r]=cell;
         }
     }
 
-    // Controles ECO setpoint: [−] ECO: 16°C [+]
-    { lv_obj_t *b=lv_obj_create(scr_prog);
-      lv_obj_set_size(b,56,40); lv_obj_align(b,LV_ALIGN_CENTER,-90,+108);
-      lv_obj_set_style_bg_color(b,lv_color_hex(COL_CARD),0);
-      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
-      lv_obj_set_style_pad_all(b,0,0);
-      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_add_event_cb(b,cb_eco_minus,LV_EVENT_CLICKED,nullptr);
-      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"\xe2\x88\x92"); // −
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
+    // Controles temperatura: [−]  20°C  [+]
+    auto mk_pm=[](lv_obj_t *par, int x, int y, lv_event_cb_t cb, const char *txt) {
+        lv_obj_t *b=lv_obj_create(par);
+        lv_obj_set_size(b,72,52); lv_obj_set_pos(b,x,y);
+        lv_obj_set_style_bg_color(b,lv_color_hex(COL_CARD),0);
+        lv_obj_set_style_radius(b,10,0); lv_obj_set_style_border_width(b,0,0);
+        lv_obj_set_style_pad_all(b,0,0);
+        lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b,cb,LV_EVENT_CLICKED,nullptr);
+        lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,txt);
+        lv_obj_set_style_text_font(l,&lv_font_montserrat_40,0);
+        lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l);
+    };
+    mk_pm(scr_prog,  60, 354, cb_eco_minus, "\xe2\x88\x92");
+    mk_pm(scr_prog, 348, 354, cb_eco_plus,  "+");
 
-    { char ebuf[14]; snprintf(ebuf,sizeof(ebuf),"ECO: %d\xc2\xb0""C",cfg_eco_sp);
-      lbl_eco_sp = centered_label(scr_prog, ebuf, &lv_font_montserrat_20, COL_TEXT, +108); }
+    { char ebuf[8]; snprintf(ebuf,sizeof(ebuf),"%d\xc2\xb0""C",cfg_eco_sp);
+      lbl_eco_sp=lv_label_create(scr_prog);
+      lv_label_set_text(lbl_eco_sp,ebuf);
+      lv_obj_set_style_text_font(lbl_eco_sp,&lv_font_montserrat_40,0);
+      lv_obj_set_style_text_color(lbl_eco_sp,lv_color_hex(COL_TEXT),0);
+      lv_obj_align(lbl_eco_sp,LV_ALIGN_TOP_MID,0,357); }
 
-    { lv_obj_t *b=lv_obj_create(scr_prog);
-      lv_obj_set_size(b,56,40); lv_obj_align(b,LV_ALIGN_CENTER,+90,+108);
-      lv_obj_set_style_bg_color(b,lv_color_hex(COL_CARD),0);
-      lv_obj_set_style_radius(b,8,0); lv_obj_set_style_border_width(b,0,0);
-      lv_obj_set_style_pad_all(b,0,0);
-      lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
-      lv_obj_add_event_cb(b,cb_eco_plus,LV_EVENT_CLICKED,nullptr);
-      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"+");
-      lv_obj_set_style_text_font(l,&lv_font_montserrat_20,0);
-      lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
-
-    make_big_btn(scr_prog, "SALIR", COL_OFF, +165, 220, 52, cb_prog_exit, nullptr);
+    make_big_btn(scr_prog, "SALIR", COL_OFF, +192, 220, 52, cb_prog_exit, nullptr);
 }
 
 // ── BUILD TILE SETTINGS ──────────────────────────────────────
@@ -2520,7 +2544,7 @@ void setup() {
     prefs.end();
     { Preferences ph; ph.begin("heat",true);
       cfg_eco_sp=(int)ph.getInt("eco_sp",16);
-      for(int d=0;d<7;d++){ char k[8]; snprintf(k,sizeof(k),"prog%d",d); cfg_prog[d]=(uint8_t)ph.getInt(k,0); }
+      for(int d=0;d<7;d++){ char k[8]; snprintf(k,sizeof(k),"prog%d",d); cfg_prog[d]=ph.getULong64(k,0); }
       ph.end(); }
 
     Wire.begin(I2C_SDA,I2C_SCL);
