@@ -1548,7 +1548,7 @@ static void build_scr_heatmap() {
       lv_obj_set_style_pad_all(b,0,0);
       lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_event_cb(b,cb_hm_week_prev,LV_EVENT_CLICKED,nullptr);
-      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,LV_SYMBOL_LEFT "\nSem");
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"< Sem");
       lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
       lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
     { lv_obj_t *b=lv_obj_create(scr_heatmap);
@@ -1558,7 +1558,7 @@ static void build_scr_heatmap() {
       lv_obj_set_style_pad_all(b,0,0);
       lv_obj_clear_flag(b,LV_OBJ_FLAG_SCROLLABLE); lv_obj_add_flag(b,LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_event_cb(b,cb_hm_week_next,LV_EVENT_CLICKED,nullptr);
-      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"Sem\n" LV_SYMBOL_RIGHT);
+      lv_obj_t *l=lv_label_create(b); lv_label_set_text(l,"Sem >");
       lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
       lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l); }
 
@@ -1795,7 +1795,7 @@ static void cb_eco_minus(lv_event_t *e) {
     Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
 }
 static void cb_eco_plus(lv_event_t *e) {
-    if(cfg_eco_sp < heat_setpoint - 1) cfg_eco_sp++;
+    if(cfg_eco_sp < 35) cfg_eco_sp++;
     if(lbl_eco_sp){ char b[8]; snprintf(b,sizeof(b),"%d\xc2\xb0""C",cfg_eco_sp); lv_label_set_text(lbl_eco_sp,b); }
     Preferences p; p.begin("heat",false); p.putInt("eco_sp",cfg_eco_sp); p.end();
 }
@@ -1887,7 +1887,7 @@ static void build_scr_prog() {
         lv_obj_set_style_text_font(l,&lv_font_montserrat_40,0);
         lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0); lv_obj_center(l);
     };
-    mk_pm(scr_prog,  60, 354, cb_eco_minus, "\xe2\x88\x92");
+    mk_pm(scr_prog,  60, 354, cb_eco_minus, "-");
     mk_pm(scr_prog, 348, 354, cb_eco_plus,  "+");
 
     { char ebuf[8]; snprintf(ebuf,sizeof(ebuf),"%d\xc2\xb0""C",cfg_eco_sp);
