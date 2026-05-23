@@ -14,7 +14,7 @@
       entity_id: binary_sensor.inundacion
       to: "on"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🚨 INUNDACIÓN DETECTADA"
         message: "Sensor de inundación activo. Válvulas cerradas automáticamente."
@@ -29,7 +29,7 @@
       entity_id: binary_sensor.humo_calor
       to: "on"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🔥 ALARMA HUMO/CALOR"
         message: "Detector SFL-910 cocina activo. Sirena encendida."
@@ -44,7 +44,7 @@
       entity_id: sensor.estado_alarma
       to: "GRACE"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🚨 POSIBLE INTRUSIÓN"
         message: "Movimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
@@ -59,7 +59,7 @@
       entity_id: sensor.estado_alarma
       to: "SOUNDING"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🔴 ALARMA ACTIVADA"
         message: "La alarma está sonando en casa."
@@ -76,7 +76,7 @@
       for:
         seconds: 10
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "⚡ CORTE DE LUZ"
         message: "Sin alimentación 220VAC detectada en casa."
@@ -90,7 +90,7 @@
       entity_id: binary_sensor.red_electrica
       to: "on"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "✅ Luz restaurada"
         message: "La alimentación 220VAC ha vuelto."
@@ -104,7 +104,7 @@
       entity_id: sensor.estado_alarma
       to: "ARMED"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🛡️ Alarma armada"
         message: "Sistema de alarma activado."
@@ -119,7 +119,7 @@
       to: "OFF"
       from: "ARMED"
   action:
-    - service: notify.mobile_app_tu_movil
+    - service: notify.mobile_app_oneplus
       data:
         title: "🔓 Alarma desarmada"
         message: "Sistema de alarma desactivado."
