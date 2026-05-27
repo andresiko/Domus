@@ -6,11 +6,6 @@
     - platform: state
       entity_id: binary_sensor.inundacion
       to: "on"
-    - platform: state
-      entity_id: binary_sensor.inundacion
-      to: "on"
-      for:
-        minutes: 5
   condition:
     - condition: state
       entity_id: binary_sensor.inundacion
@@ -23,6 +18,10 @@
         data:
           tag: domus_flood
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🚨 INUNDACIÓN DETECTADA\nSensor de inundación activo. Válvulas cerradas automáticamente."
 
 - id: domus_alert_flood_repeat
   alias: "DOMUS — Alerta inundación repetición"
@@ -41,6 +40,10 @@
         data:
           tag: domus_flood
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🚨 INUNDACIÓN DETECTADA\nSensor de inundación activo. Válvulas cerradas automáticamente."
 
 - id: domus_alert_smoke
   alias: "DOMUS — Alerta humo/calor"
@@ -56,6 +59,10 @@
         data:
           tag: domus_smoke
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🔥 ALARMA HUMO/CALOR\nDetector SFL-910 cocina activo. Sirena encendida."
 
 - id: domus_alert_smoke_repeat
   alias: "DOMUS — Alerta humo/calor repetición"
@@ -74,6 +81,10 @@
         data:
           tag: domus_smoke
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🔥 ALARMA HUMO/CALOR\nDetector SFL-910 cocina activo. Sirena encendida."
 
 - id: domus_alert_intrusion
   alias: "DOMUS — Alerta intrusión"
@@ -89,6 +100,10 @@
         data:
           tag: domus_intrusion
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
 
 - id: domus_alert_intrusion_repeat
   alias: "DOMUS — Alerta intrusión repetición"
@@ -107,6 +122,10 @@
         data:
           tag: domus_intrusion
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
 
 - id: domus_alert_sounding
   alias: "DOMUS — Alarma sonando"
@@ -122,6 +141,10 @@
         data:
           tag: domus_sounding
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🔴 ALARMA ACTIVADA\nLa alarma está sonando en casa."
 
 - id: domus_alert_sounding_repeat
   alias: "DOMUS — Alarma sonando repetición"
@@ -140,6 +163,10 @@
         data:
           tag: domus_sounding
           importance: high
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🔴 ALARMA ACTIVADA\nLa alarma está sonando en casa."
 
 - id: domus_alert_power_cut
   alias: "DOMUS — Corte de luz"
@@ -156,6 +183,10 @@
         message: "Sin alimentación 220VAC detectada en casa."
         data:
           tag: domus_power
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC detectada en casa."
 
 - id: domus_alert_power_cut_repeat
   alias: "DOMUS — Corte de luz repetición"
@@ -173,6 +204,10 @@
         message: "Sin alimentación 220VAC detectada en casa."
         data:
           tag: domus_power
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC detectada en casa."
 
 - id: domus_alert_power_restore
   alias: "DOMUS — Luz restaurada"
@@ -187,6 +222,10 @@
         message: "La alimentación 220VAC ha vuelto."
         data:
           tag: domus_power
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "✅ Luz restaurada\nLa alimentación 220VAC ha vuelto."
 
 - id: domus_alert_alarm_armed
   alias: "DOMUS — Alarma armada"
@@ -201,6 +240,10 @@
         message: "Sistema de alarma activado."
         data:
           tag: domus_armed
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🛡️ Alarma armada\nSistema de alarma activado."
 
 - id: domus_alert_alarm_disarmed
   alias: "DOMUS — Alarma desarmada"
@@ -216,3 +259,7 @@
         message: "Sistema de alarma desactivado."
         data:
           tag: domus_armed
+    - service: telegram_bot.send_message
+      data:
+        chat_id: 133097449
+        message: "🔓 Alarma desarmada\nSistema de alarma desactivado."
