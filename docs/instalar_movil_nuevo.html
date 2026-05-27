@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOMUS — Añadir móvil nuevo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    color: #1a1a2e;
+    background: #f0f4f8;
+    padding: 40px 20px;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+    border-radius: 16px;
+    padding: 36px 40px;
+    margin-bottom: 24px;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .header-icon {
+    width: 64px;
+    height: 64px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    flex-shrink: 0;
+  }
+
+  .header h1 {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 4px;
+  }
+
+  .header p {
+    color: rgba(255,255,255,0.7);
+    font-size: 14px;
+  }
+
+  /* Section cards */
+  .card {
+    background: white;
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .app-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .app-icon.tailscale { background: #1a1a2e; }
+  .app-icon.ha { background: #41BDF5; }
+  .app-icon.notif { background: #7c3aed; }
+  .app-icon.ref { background: #0f766e; }
+
+  .card-title {
+    flex: 1;
+  }
+
+  .step-number {
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 2px;
+  }
+
+  .card-title h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #0f172a;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .store-badges {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: #0f172a;
+    color: white;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .badge.ios { background: #1d1d1f; }
+  .badge.android { background: #00875a; }
+
+  /* Steps */
+  .step {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 12px;
+    align-items: flex-start;
+  }
+
+  .num {
+    min-width: 26px;
+    height: 26px;
+    background: #e2e8f0;
+    color: #475569;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+
+  .step-text { flex: 1; padding-top: 2px; color: #334155; }
+
+  code {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    color: #0f172a;
+  }
+
+  .note {
+    background: #f0f9ff;
+    border-left: 4px solid #38bdf8;
+    border-radius: 0 8px 8px 0;
+    padding: 11px 15px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: #0369a1;
+    display: flex;
+    gap: 8px;
+  }
+
+  .warning {
+    background: #fff7ed;
+    border-left: 4px solid #fb923c;
+    border-radius: 0 8px 8px 0;
+    padding: 11px 15px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: #9a3412;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* Reference table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  tr { border-bottom: 1px solid #f1f5f9; }
+  tr:last-child { border-bottom: none; }
+
+  td { padding: 11px 4px; vertical-align: top; }
+  td:first-child { color: #64748b; font-weight: 500; width: 45%; }
+  td:last-child { color: #0f172a; }
+
+  .footer {
+    text-align: center;
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 8px;
+    padding-bottom: 20px;
+  }
+
+  @media print {
+    body { background: white; padding: 0; }
+    .card { box-shadow: none; border: 1px solid #e2e8f0; page-break-inside: avoid; }
+    .header { border-radius: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-icon">🏠</div>
+    <div>
+      <h1>Añadir móvil nuevo</h1>
+      <p>Instrucciones para instalar el acceso remoto y notificaciones DOMUS en un teléfono adicional</p>
+    </div>
+  </div>
+
+  <!-- Paso 1: Tailscale -->
+  <div class="card">
+    <div class="card-header">
+      <div class="app-icon tailscale">
+        <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+          <circle cx="7" cy="7" r="4" fill="white"/>
+          <circle cx="23" cy="7" r="4" fill="white" opacity="0.4"/>
+          <circle cx="7" cy="23" r="4" fill="white" opacity="0.4"/>
+          <circle cx="23" cy="23" r="4" fill="white" opacity="0.4"/>
+          <circle cx="15" cy="15" r="4" fill="white" opacity="0.7"/>
+        </svg>
+      </div>
+      <div class="card-title">
+        <div class="step-number">Paso 1</div>
+        <h2>Instalar Tailscale</h2>
+      </div>
+    </div>
+
+    <div class="store-badges">
+      <div class="badge android">▶ Google Play</div>
+      <div class="badge ios"> App Store</div>
+    </div>
+
+    <div class="step"><div class="num">1</div><div class="step-text">Descarga <strong>Tailscale</strong> desde Google Play o App Store.</div></div>
+    <div class="step"><div class="num">2</div><div class="step-text">Abre la app e inicia sesión con la cuenta <strong>andresiko.github</strong>.</div></div>
+    <div class="step"><div class="num">3</div><div class="step-text">Activa el toggle principal hasta que aparezca <strong>Connected</strong>.</div></div>
+
+    <div class="note">ℹ️ &nbsp;Tailscale crea una VPN privada entre el móvil y la Raspberry Pi. El tráfico del resto de apps no se ve afectado — solo enruta el tráfico DOMUS.</div>
+
+    <div class="warning">⚠️ &nbsp;<strong>Importante:</strong> Android puede cerrar Tailscale para ahorrar batería. Para evitarlo: <strong>Ajustes del móvil → Aplicaciones → Tailscale → Batería → Sin restricciones</strong>. Sin esto Tailscale se desactivará solo y perderás el acceso remoto.</div>
+  </div>
+
+  <!-- Paso 2: Home Assistant -->
+  <div class="card">
+    <div class="card-header">
+      <div class="app-icon ha">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <path d="M16 4L4 14v14h8v-8h8v8h8V14L16 4z" fill="white"/>
+          <circle cx="16" cy="14" r="3" fill="#41BDF5"/>
+        </svg>
+      </div>
+      <div class="card-title">
+        <div class="step-number">Paso 2</div>
+        <h2>Instalar Home Assistant</h2>
+      </div>
+    </div>
+
+    <div class="store-badges">
+      <div class="badge android">▶ Google Play</div>
+      <div class="badge ios"> App Store</div>
+    </div>
+
+    <div class="step"><div class="num">1</div><div class="step-text">Descarga <strong>Home Assistant</strong> desde Google Play o App Store.</div></div>
+    <div class="step"><div class="num">2</div><div class="step-text">Al abrir la app, introduce la dirección del servidor:<br><code>http://192.168.1.146:8123</code></div></div>
+    <div class="step"><div class="num">3</div><div class="step-text">Inicia sesión con el usuario y contraseña que facilite el propietario.</div></div>
+    <div class="step"><div class="num">4</div><div class="step-text">En ajustes de la app, añade también la URL externa:<br><code>http://100.118.255.8:8123</code></div></div>
+
+    <div class="note">ℹ️ &nbsp;Con el WiFi de casa se usa la URL interna. Con datos móviles (y Tailscale activo), la app usa automáticamente la URL externa.</div>
+  </div>
+
+  <!-- Paso 3: Notificaciones -->
+  <div class="card">
+    <div class="card-header">
+      <div class="app-icon notif">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M14 4C9.6 4 6 7.6 6 12v7l-2 2v1h20v-1l-2-2v-7c0-4.4-3.6-8-8-8z" fill="white"/>
+          <path d="M11.5 23c0 1.4 1.1 2.5 2.5 2.5s2.5-1.1 2.5-2.5H11.5z" fill="white" opacity="0.7"/>
+        </svg>
+      </div>
+      <div class="card-title">
+        <div class="step-number">Paso 3 — Lo hace el propietario</div>
+        <h2>Activar notificaciones push</h2>
+      </div>
+    </div>
+
+    <div class="step"><div class="num">1</div><div class="step-text">Con la app instalada y conectada, el nuevo móvil aparece automáticamente en HA como dispositivo.</div></div>
+    <div class="step"><div class="num">2</div><div class="step-text">En HA: <strong>Configuración → Aplicaciones → Companion App</strong> — anotar el nombre del nuevo dispositivo (algo como <code>notify.mobile_app_nombre</code>).</div></div>
+    <div class="step"><div class="num">3</div><div class="step-text">Editar el archivo <code>automations.yaml</code> en HA y añadir el nuevo servicio de notificación junto al existente.</div></div>
+
+    <div class="warning">⚠️ &nbsp;Sin este paso el móvil puede ver y controlar el sistema, pero <strong>no recibirá notificaciones</strong> de alarma, inundación ni emergencias.</div>
+  </div>
+
+  <!-- Referencia -->
+  <div class="card">
+    <div class="card-header">
+      <div class="app-icon ref">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect x="5" y="5" width="18" height="4" rx="2" fill="white"/>
+          <rect x="5" y="12" width="12" height="4" rx="2" fill="white" opacity="0.7"/>
+          <rect x="5" y="19" width="15" height="4" rx="2" fill="white" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="card-title">
+        <div class="step-number">Referencia</div>
+        <h2>Datos de conexión</h2>
+      </div>
+    </div>
+
+    <table>
+      <tr><td>URL local (WiFi de casa)</td><td><code>http://192.168.1.146:8123</code></td></tr>
+      <tr><td>URL externa (datos móviles)</td><td><code>http://100.118.255.8:8123</code></td></tr>
+      <tr><td>Cuenta Tailscale</td><td><code>andresiko.github</code></td></tr>
+      <tr><td>Raspberry Pi</td><td><code>192.168.1.146</code></td></tr>
+    </table>
+  </div>
+
+  <div class="footer">DOMUS · Sistema de control del hogar</div>
+
+</div>
+</body>
+</html>
