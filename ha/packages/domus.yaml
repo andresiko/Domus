@@ -1,12 +1,7 @@
-# DOMUS — Entidades Home Assistant
-# Coloca este archivo en: config/packages/domus.yaml
-# Requiere en configuration.yaml:
-#   homeassistant:
-#     packages: !include_dir_named packages
+# DOMUS — Entidades y automatizaciones Home Assistant v2.0
+# packages/domus.yaml
 
 mqtt:
-  # ── Switches (relés controlables) ──────────────────────────
-
   switch:
     - name: "Agua"
       unique_id: domus_relay_agua
@@ -18,7 +13,6 @@ mqtt:
       payload_on:  '{"output1":{"value":true}}'
       payload_off: '{"output1":{"value":false}}'
       icon: mdi:valve
-      device_class: switch
 
     - name: "Sirena"
       unique_id: domus_relay_sirena
@@ -31,7 +25,6 @@ mqtt:
       payload_off: '{"output3":{"value":false}}'
       icon: mdi:alarm-bell
 
-    # Calefacción: solo lectura (la gestiona DOMUS, no la controles desde HA)
     - name: "Calefaccion Relay"
       unique_id: domus_relay_calef
       state_topic: "A6v3/30EDA03B1378/STATE"
@@ -42,8 +35,6 @@ mqtt:
       payload_on:  '{"output2":{"value":true}}'
       payload_off: '{"output2":{"value":false}}'
       icon: mdi:radiator
-
-  # ── Sensores binarios (entradas A6v3) ──────────────────────
 
   binary_sensor:
     - name: "Inundacion"
@@ -57,7 +48,6 @@ mqtt:
     - name: "Movimiento"
       unique_id: domus_sensor_pir
       state_topic: "A6v3/30EDA03B1378/STATE"
-      # PIR lógica invertida: input4=false → detectado
       value_template: "{{ 'ON' if not value_json.input4.value else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
@@ -66,7 +56,6 @@ mqtt:
     - name: "Humo Calor"
       unique_id: domus_sensor_smoke
       state_topic: "A6v3/30EDA03B1378/STATE"
-      # SFL-910 lógica invertida: input5=false → alarma
       value_template: "{{ 'ON' if not value_json.input5.value else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
@@ -75,13 +64,10 @@ mqtt:
     - name: "Red Electrica"
       unique_id: domus_sensor_power
       state_topic: "A6v3/30EDA03B1378/STATE"
-      # input6=false → corte de red
       value_template: "{{ 'ON' if value_json.input6.value else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
       device_class: power
-
-    # ── Sensores DOMUS/status (publican la CrowPanel) ─────────
 
     - name: "Alarma Activa"
       unique_id: domus_alarm_active
@@ -98,8 +84,6 @@ mqtt:
       payload_on: "ON"
       payload_off: "OFF"
       device_class: sound
-
-  # ── Sensores de medida ─────────────────────────────────────
 
   sensor:
     - name: "Temperatura Interior"
@@ -134,3 +118,596 @@ mqtt:
         {% elif m == 2 %}Consigna
         {% else %}Programa{% endif %}
       icon: mdi:thermostat
+
+automation:
+
+  # ── NOTIFICACIONES ───────────────────────────────────────────────────────
+
+  - id: domus_tg_flood_on
+    alias: "DOMUS Telegram - Inundacion detectada"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.inundacion
+        to: "on"
+        for:
+          seconds: 3
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            💧 INUNDACION DETECTADA
+            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada (auto)' }}
+          inline_keyboard:
+            - - text: "Abrir válvula"
+                callback_data: "agua_abrir"
+              - text: "Cerrar válvula"
+                callback_data: "agua_cerrar"
+
+  - id: domus_tg_flood_repeat
+    alias: "DOMUS Telegram - Inundacion repeticion 5min"
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.inundacion
+        state: "on"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            💧 INUNDACION ACTIVA
+            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
+          inline_keyboard:
+            - - text: "Abrir válvula"
+                callback_data: "agua_abrir"
+              - text: "Cerrar válvula"
+                callback_data: "agua_cerrar"
+
+  - id: domus_tg_flood_off
+    alias: "DOMUS Telegram - Inundacion resuelta"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.inundacion
+        to: "off"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            ✅ Inundación resuelta
+            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
+          inline_keyboard:
+            - - text: "Abrir válvula"
+                callback_data: "agua_abrir"
+
+  - id: domus_tg_smoke_on
+    alias: "DOMUS Telegram - Alarma humo calor"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.humo_calor
+        to: "on"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            🔥 ALARMA HUMO/CALOR
+            Detector cocina activo. Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+          inline_keyboard:
+            - - text: "Apagar sirena"
+                callback_data: "sirena_off"
+
+  - id: domus_tg_smoke_repeat
+    alias: "DOMUS Telegram - Humo calor repeticion 5min"
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.humo_calor
+        state: "on"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            🔥 HUMO/CALOR ACTIVO
+            Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+          inline_keyboard:
+            - - text: "Apagar sirena"
+                callback_data: "sirena_off"
+
+  - id: domus_tg_alarm_grace
+    alias: "DOMUS Telegram - Alarma intrusion grace"
+    trigger:
+      - platform: state
+        entity_id: sensor.estado_alarma
+        to: "GRACE"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado. 30 segundos para cancelar."
+          inline_keyboard:
+            - - text: "Desactivar alarma"
+                callback_data: "desactivar"
+
+  - id: domus_tg_alarm_grace_repeat
+    alias: "DOMUS Telegram - Intrusion repeticion 5min"
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: sensor.estado_alarma
+        state: "GRACE"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🚨 ALARMA EN PERIODO DE GRACIA"
+          inline_keyboard:
+            - - text: "Desactivar"
+                callback_data: "desactivar"
+
+  - id: domus_tg_alarm_sounding
+    alias: "DOMUS Telegram - Alarma sonando"
+    trigger:
+      - platform: state
+        entity_id: sensor.estado_alarma
+        to: "SOUNDING"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔴 ALARMA SONANDO\nSirena activa en casa."
+          inline_keyboard:
+            - - text: "Apagar sirena"
+                callback_data: "sirena_off"
+              - text: "Desactivar"
+                callback_data: "desactivar"
+
+  - id: domus_tg_alarm_sounding_repeat
+    alias: "DOMUS Telegram - Alarma sonando repeticion 5min"
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: sensor.estado_alarma
+        state: "SOUNDING"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔴 ALARMA SONANDO"
+          inline_keyboard:
+            - - text: "Apagar sirena"
+                callback_data: "sirena_off"
+              - text: "Desactivar"
+                callback_data: "desactivar"
+
+  - id: domus_tg_power_off
+    alias: "DOMUS Telegram - Corte de luz"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.red_electrica
+        to: "off"
+        for:
+          seconds: 10
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC."
+
+  - id: domus_tg_power_on
+    alias: "DOMUS Telegram - Luz restaurada"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.red_electrica
+        to: "on"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "✅ Luz restaurada. Alimentación 220VAC OK."
+
+  - id: domus_tg_alarm_armed
+    alias: "DOMUS Telegram - Alarma armada"
+    trigger:
+      - platform: state
+        entity_id: sensor.estado_alarma
+        to: "ARMED"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🛡️ Alarma armada"
+
+  - id: domus_tg_alarm_disarmed
+    alias: "DOMUS Telegram - Alarma desarmada"
+    trigger:
+      - platform: state
+        entity_id: sensor.estado_alarma
+        to: "OFF"
+        from: "ARMED"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔓 Alarma desarmada"
+
+  - id: domus_tg_agua_on
+    alias: "DOMUS Telegram - Valvula agua abierta"
+    trigger:
+      - platform: state
+        entity_id: switch.agua
+        to: "on"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔓 Válvula agua abierta"
+          inline_keyboard:
+            - - text: "Cerrar válvula"
+                callback_data: "agua_cerrar"
+
+  - id: domus_tg_agua_off
+    alias: "DOMUS Telegram - Valvula agua cerrada"
+    trigger:
+      - platform: state
+        entity_id: switch.agua
+        to: "off"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔒 Válvula agua cerrada"
+          inline_keyboard:
+            - - text: "Abrir válvula"
+                callback_data: "agua_abrir"
+
+  - id: domus_tg_temp_low
+    alias: "DOMUS Telegram - Temperatura baja"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.temperatura_interior
+        below: 5
+        for:
+          minutes: 5
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🥶 Temperatura baja\nInterior: {{ states('sensor.temperatura_interior') }}°C"
+          inline_keyboard:
+            - - text: "Encender calefacción"
+                callback_data: "calef_on"
+
+  # ── COMANDOS ─────────────────────────────────────────────────────────────
+
+  - id: domus_cmd_estado
+    alias: "DOMUS Bot - /estado"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/estado"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: >-
+            🏠 DOMUS Estado
+
+            Alarma: {% set s = states('sensor.estado_alarma') %}{% if s == 'OFF' %}Desarmada{% elif s == 'ARMING' %}Armando...{% elif s == 'ARMED' %}Armada 🛡️{% elif s == 'GRACE' %}PERIODO DE GRACIA{% elif s == 'SOUNDING' %}SONANDO{% else %}{{ s }}{% endif %}
+
+            Inundación: {{ 'ACTIVA' if is_state('binary_sensor.inundacion', 'on') else 'OK' }}
+            Humo/calor: {{ 'ACTIVA' if is_state('binary_sensor.humo_calor', 'on') else 'OK' }}
+            Red 220V: {{ 'OK' if is_state('binary_sensor.red_electrica', 'on') else 'CORTE' }}
+
+            Válvula agua: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
+            Calefacción: {{ 'ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}
+            Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+
+            Temperatura: {{ states('sensor.temperatura_interior') }}°C
+            Humedad: {{ states('sensor.humedad') }}%
+
+  - id: domus_cmd_temp
+    alias: "DOMUS Bot - /temp"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/temp"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🌡️ Interior: {{ states('sensor.temperatura_interior') }}°C\n💧 Humedad: {{ states('sensor.humedad') }}%"
+
+  - id: domus_cmd_agua
+    alias: "DOMUS Bot - /agua"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/agua"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args[0] | default('') == 'on' }}"
+            sequence:
+              - service: switch.turn_on
+                target:
+                  entity_id: switch.agua
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: 133097449
+                  message: "🔓 Válvula agua abierta"
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args[0] | default('') == 'off' }}"
+            sequence:
+              - service: switch.turn_off
+                target:
+                  entity_id: switch.agua
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: 133097449
+                  message: "🔒 Válvula agua cerrada"
+        default:
+          - service: telegram_bot.send_message
+            data:
+              chat_id: 133097449
+              message: "Uso: /agua on o /agua off\nEstado: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}"
+              inline_keyboard:
+                - - text: "Abrir"
+                    callback_data: "agua_abrir"
+                  - text: "Cerrar"
+                    callback_data: "agua_cerrar"
+
+  - id: domus_cmd_calef
+    alias: "DOMUS Bot - /calef"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/calef"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args[0] | default('') == 'on' }}"
+            sequence:
+              - service: switch.turn_on
+                target:
+                  entity_id: switch.calefaccion_relay
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: 133097449
+                  message: "♨️ Calefacción encendida"
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args[0] | default('') == 'off' }}"
+            sequence:
+              - service: switch.turn_off
+                target:
+                  entity_id: switch.calefaccion_relay
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: 133097449
+                  message: "❄️ Calefacción apagada"
+        default:
+          - service: telegram_bot.send_message
+            data:
+              chat_id: 133097449
+              message: "Uso: /calef on o /calef off\nEstado: {{ 'ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}"
+              inline_keyboard:
+                - - text: "Encender"
+                    callback_data: "calef_on"
+                  - text: "Apagar"
+                    callback_data: "calef_off"
+
+  - id: domus_cmd_sirena
+    alias: "DOMUS Bot - /sirena"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/sirena"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.sirena
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔕 Sirena apagada"
+
+  - id: domus_cmd_armar
+    alias: "DOMUS Bot - /armar"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/armar"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args | length == 0 }}"
+            sequence:
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: 133097449
+                  message: "Indica el PIN: /armar XXXX"
+        default:
+          - service: mqtt.publish
+            data:
+              topic: "DOMUS/CMD"
+              payload: '{"cmd":"arm","pin":"{{ trigger.event.data.args[0] }}"}'
+          - service: telegram_bot.send_message
+            data:
+              chat_id: 133097449
+              message: "⏳ Activando alarma..."
+
+  - id: domus_cmd_desactivar
+    alias: "DOMUS Bot - /desactivar"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.command_received
+        event_data:
+          command: "/desactivar"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "DOMUS/CMD"
+          payload: '{"cmd":"disarm"}'
+      - service: telegram_bot.send_message
+        data:
+          chat_id: 133097449
+          message: "🔓 Alarma desactivada"
+
+  # ── CALLBACKS (botones inline) ────────────────────────────────────────────
+
+  - id: domus_cb_sirena_off
+    alias: "DOMUS Bot - Boton apagar sirena"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "sirena_off"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.sirena
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Sirena apagada"
+
+  - id: domus_cb_desactivar
+    alias: "DOMUS Bot - Boton desactivar alarma"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "desactivar"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "DOMUS/CMD"
+          payload: '{"cmd":"disarm"}'
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Alarma desactivada"
+
+  - id: domus_cb_agua_abrir
+    alias: "DOMUS Bot - Boton abrir valvula"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "agua_abrir"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.agua
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Válvula abierta"
+
+  - id: domus_cb_agua_cerrar
+    alias: "DOMUS Bot - Boton cerrar valvula"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "agua_cerrar"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.agua
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Válvula cerrada"
+
+  - id: domus_cb_calef_on
+    alias: "DOMUS Bot - Boton encender calefaccion"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "calef_on"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.calefaccion_relay
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Calefacción encendida"
+
+  - id: domus_cb_calef_off
+    alias: "DOMUS Bot - Boton apagar calefaccion"
+    trigger:
+      - platform: event
+        event_type: telegram_bot.callback_query_received
+        event_data:
+          data: "calef_off"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.calefaccion_relay
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Calefacción apagada"

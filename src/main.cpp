@@ -139,6 +139,8 @@ static unsigned long tuya_last      = 0;
 #define MQTT_SET   "A6v3/30EDA03B1378/SET"
 static unsigned long mqtt_last_activity  = 0;
 static time_t        mqtt_last_conn_epoch = 0;
+static volatile bool mqtt_cmd_disarm     = false;
+static volatile bool mqtt_cmd_arm        = false;
 static time_t        domus_pub_epoch      = 0;
 
 class DomusBroker : public sMQTTBroker {
@@ -150,6 +152,23 @@ public:
             Serial.println("Broker: cliente conectado");
         else if (ev->Type() == Public_sMQTTEventType) {
             auto *p = (sMQTTPublicClientEvent*)ev;
+            if (p->Topic() == "DOMUS/CMD") {
+                JsonDocument doc;
+                if (!deserializeJson(doc, p->Payload().c_str(), p->Payload().size())) {
+                    String cmd = doc["cmd"] | "";
+                    if (cmd == "disarm") {
+                        mqtt_cmd_disarm = true;
+                        Serial.println("[CMD] disarm via MQTT");
+                    } else if (cmd == "arm") {
+                        String pin = doc["pin"] | "";
+                        if (pin.length()==4 && strncmp(pin.c_str(),cfg_pin,4)==0)
+                            mqtt_cmd_arm = true;
+                        else
+                            Serial.println("[CMD] arm via MQTT: PIN incorrecto");
+                    }
+                }
+                return true;
+            }
             if (p->Topic() != MQTT_STATE) return true;
             JsonDocument doc;
             if (deserializeJson(doc, p->Payload().c_str(), p->Payload().size())) return true;
@@ -2915,6 +2934,25 @@ void loop() {
         hm_save();
     }
     // ─────────────────────────────────────────────────────────
+
+    // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
+    if(mqtt_cmd_disarm){
+        mqtt_cmd_disarm=false;
+        alarm_state=AS_OFF; alarm_armed=false; intruder_active=false;
+        critical_alert=false; beep_seq={}; siren_off_at=0;
+        relay_set(3,false); log_event(EVT_ALARM_DISARM,1);
+        go_to(SCR_TV); ui_needs_update=true;
+    }
+    if(mqtt_cmd_arm){
+        mqtt_cmd_arm=false;
+        if(alarm_state==AS_OFF && !alarm_armed){
+            alarm_state=AS_ARMING; alarm_armed=true;
+            alarm_ts=millis(); arming_end_ms=alarm_ts+120000UL;
+            start_beep_seq(1,100); log_event(EVT_ALARM_ARM,0);
+            go_to(SCR_ARMING_SCR);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────
 
     if(scr_change){ scr_change=false; do_switch(pend_scr); }
     if(millis()-wx_last  >30UL*60000UL) fetch_weather();
