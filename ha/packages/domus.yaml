@@ -135,13 +135,12 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            💧 INUNDACION DETECTADA
-            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada (auto)' }}
+          parse_mode: markdown
+          message: "💧 *INUNDACIÓN DETECTADA*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada (auto)' }}"
           inline_keyboard:
-            - - text: "Abrir válvula"
+            - - text: "🔓 Abrir válvula"
                 callback_data: "agua_abrir"
-              - text: "Cerrar válvula"
+              - text: "🔒 Cerrar válvula"
                 callback_data: "agua_cerrar"
 
   - id: domus_tg_flood_repeat
@@ -157,13 +156,12 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            💧 INUNDACION ACTIVA
-            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
+          parse_mode: markdown
+          message: "💧 *INUNDACIÓN ACTIVA*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}"
           inline_keyboard:
-            - - text: "Abrir válvula"
+            - - text: "🔓 Abrir válvula"
                 callback_data: "agua_abrir"
-              - text: "Cerrar válvula"
+              - text: "🔒 Cerrar válvula"
                 callback_data: "agua_cerrar"
 
   - id: domus_tg_flood_off
@@ -176,11 +174,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            ✅ Inundación resuelta
-            Válvula: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
+          parse_mode: markdown
+          message: "✅ *Inundación resuelta*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}"
           inline_keyboard:
-            - - text: "Abrir válvula"
+            - - text: "🔓 Abrir válvula"
                 callback_data: "agua_abrir"
 
   - id: domus_tg_smoke_on
@@ -193,11 +190,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            🔥 ALARMA HUMO/CALOR
-            Detector cocina activo. Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+          parse_mode: markdown
+          message: "🔥 *ALARMA HUMO/CALOR*\nDetector cocina activo\nSirena: {{ '🔴 ON' if is_state('switch.sirena', 'on') else 'OFF' }}"
           inline_keyboard:
-            - - text: "Apagar sirena"
+            - - text: "🔕 Apagar sirena"
                 callback_data: "sirena_off"
 
   - id: domus_tg_smoke_repeat
@@ -213,11 +209,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            🔥 HUMO/CALOR ACTIVO
-            Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+          parse_mode: markdown
+          message: "🔥 *HUMO/CALOR ACTIVO*\nSirena: {{ '🔴 ON' if is_state('switch.sirena', 'on') else 'OFF' }}"
           inline_keyboard:
-            - - text: "Apagar sirena"
+            - - text: "🔕 Apagar sirena"
                 callback_data: "sirena_off"
 
   - id: domus_tg_alarm_grace
@@ -230,9 +225,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado. 30 segundos para cancelar."
+          parse_mode: markdown
+          message: "🚨 *POSIBLE INTRUSIÓN*\nMovimiento detectado\n30 segundos para cancelar"
           inline_keyboard:
-            - - text: "Desactivar alarma"
+            - - text: "🔓 Desactivar alarma"
                 callback_data: "desactivar"
 
   - id: domus_tg_alarm_grace_repeat
@@ -248,9 +244,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🚨 ALARMA EN PERIODO DE GRACIA"
+          parse_mode: markdown
+          message: "🚨 *ALARMA — PERIODO DE GRACIA*"
           inline_keyboard:
-            - - text: "Desactivar"
+            - - text: "🔓 Desactivar"
                 callback_data: "desactivar"
 
   - id: domus_tg_alarm_sounding
@@ -263,11 +260,12 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔴 ALARMA SONANDO\nSirena activa en casa."
+          parse_mode: markdown
+          message: "🔴 *ALARMA SONANDO*\nSirena activa en casa"
           inline_keyboard:
-            - - text: "Apagar sirena"
+            - - text: "🔕 Apagar sirena"
                 callback_data: "sirena_off"
-              - text: "Desactivar"
+              - text: "🔓 Desactivar"
                 callback_data: "desactivar"
 
   - id: domus_tg_alarm_sounding_repeat
@@ -283,11 +281,12 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔴 ALARMA SONANDO"
+          parse_mode: markdown
+          message: "🔴 *ALARMA SONANDO*"
           inline_keyboard:
-            - - text: "Apagar sirena"
+            - - text: "🔕 Apagar sirena"
                 callback_data: "sirena_off"
-              - text: "Desactivar"
+              - text: "🔓 Desactivar"
                 callback_data: "desactivar"
 
   - id: domus_tg_power_off
@@ -302,7 +301,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC."
+          parse_mode: markdown
+          message: "⚡ *CORTE DE LUZ*\nSin alimentación 220VAC"
 
   - id: domus_tg_power_on
     alias: "DOMUS Telegram - Luz restaurada"
@@ -314,7 +314,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "✅ Luz restaurada. Alimentación 220VAC OK."
+          parse_mode: markdown
+          message: "✅ *Luz restaurada*\nAlimentación 220VAC OK"
 
   - id: domus_tg_alarm_armed
     alias: "DOMUS Telegram - Alarma armada"
@@ -326,7 +327,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🛡️ Alarma armada"
+          parse_mode: markdown
+          message: "🛡️ *Alarma armada*"
 
   - id: domus_tg_alarm_disarmed
     alias: "DOMUS Telegram - Alarma desarmada"
@@ -339,7 +341,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔓 Alarma desarmada"
+          parse_mode: markdown
+          message: "🔓 *Alarma desarmada*"
 
   - id: domus_tg_agua_on
     alias: "DOMUS Telegram - Valvula agua abierta"
@@ -351,9 +354,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔓 Válvula agua abierta"
+          parse_mode: markdown
+          message: "🔓 Válvula agua *abierta*"
           inline_keyboard:
-            - - text: "Cerrar válvula"
+            - - text: "🔒 Cerrar válvula"
                 callback_data: "agua_cerrar"
 
   - id: domus_tg_agua_off
@@ -366,9 +370,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔒 Válvula agua cerrada"
+          parse_mode: markdown
+          message: "🔒 Válvula agua *cerrada*"
           inline_keyboard:
-            - - text: "Abrir válvula"
+            - - text: "🔓 Abrir válvula"
                 callback_data: "agua_abrir"
 
   - id: domus_tg_temp_low
@@ -383,9 +388,10 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🥶 Temperatura baja\nInterior: {{ states('sensor.temperatura_interior') }}°C"
+          parse_mode: markdown
+          message: "🥶 *Temperatura baja*\nInterior: {{ states('sensor.temperatura_interior') }}°C"
           inline_keyboard:
-            - - text: "Encender calefacción"
+            - - text: "♨️ Encender calefacción"
                 callback_data: "calef_on"
 
   # ── COMANDOS ─────────────────────────────────────────────────────────────
@@ -404,21 +410,22 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: >-
-            🏠 DOMUS Estado
-
-            Alarma: {% set s = states('sensor.estado_alarma') %}{% if s == 'OFF' %}Desarmada{% elif s == 'ARMING' %}Armando...{% elif s == 'ARMED' %}Armada 🛡️{% elif s == 'GRACE' %}PERIODO DE GRACIA{% elif s == 'SOUNDING' %}SONANDO{% else %}{{ s }}{% endif %}
-
-            Inundación: {{ 'ACTIVA' if is_state('binary_sensor.inundacion', 'on') else 'OK' }}
-            Humo/calor: {{ 'ACTIVA' if is_state('binary_sensor.humo_calor', 'on') else 'OK' }}
-            Red 220V: {{ 'OK' if is_state('binary_sensor.red_electrica', 'on') else 'CORTE' }}
-
-            Válvula agua: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}
-            Calefacción: {{ 'ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}
-            Sirena: {{ 'ON' if is_state('switch.sirena', 'on') else 'OFF' }}
-
-            Temperatura: {{ states('sensor.temperatura_interior') }}°C
-            Humedad: {{ states('sensor.humedad') }}%
+          parse_mode: markdown
+          message: |-
+            🏠 *DOMUS — Estado*
+            ━━━━━━━━━━━━━━━
+            🛡️ *Alarma:* {% set s = states('sensor.estado_alarma') %}{% if s == 'OFF' %}Desarmada{% elif s == 'ARMING' %}Armando...{% elif s == 'ARMED' %}Armada ✅{% elif s == 'GRACE' %}⚠️ PERIODO DE GRACIA{% elif s == 'SOUNDING' %}🔴 SONANDO{% else %}{{ s }}{% endif %}
+            ━━━━━━━━━━━━━━━
+            💧 Inundación: {{ '🚨 ACTIVA' if is_state('binary_sensor.inundacion', 'on') else '✅ OK' }}
+            🔥 Humo/calor: {{ '🚨 ACTIVA' if is_state('binary_sensor.humo_calor', 'on') else '✅ OK' }}
+            ⚡ Red 220V: {{ '✅ OK' if is_state('binary_sensor.red_electrica', 'on') else '❌ CORTE' }}
+            ━━━━━━━━━━━━━━━
+            🚰 Válvula agua: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}
+            ♨️ Calefacción: {{ '🔴 ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}
+            🔊 Sirena: {{ '🔴 ON' if is_state('switch.sirena', 'on') else 'OFF' }}
+            ━━━━━━━━━━━━━━━
+            🌡️ Interior: *{{ states('sensor.temperatura_interior') }}°C*
+            💧 Humedad: {{ states('sensor.humedad') }}%
 
   - id: domus_cmd_temp
     alias: "DOMUS Bot - /temp"
@@ -434,7 +441,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🌡️ Interior: {{ states('sensor.temperatura_interior') }}°C\n💧 Humedad: {{ states('sensor.humedad') }}%"
+          parse_mode: markdown
+          message: "🌡️ Interior: *{{ states('sensor.temperatura_interior') }}°C*\n💧 Humedad: {{ states('sensor.humedad') }}%"
 
   - id: domus_cmd_agua
     alias: "DOMUS Bot - /agua"
@@ -458,7 +466,8 @@ automation:
               - service: telegram_bot.send_message
                 data:
                   chat_id: 133097449
-                  message: "🔓 Válvula agua abierta"
+                  parse_mode: markdown
+                  message: "🔓 Válvula agua *abierta*"
           - conditions:
               - condition: template
                 value_template: "{{ trigger.event.data.args[0] | default('') == 'off' }}"
@@ -469,16 +478,18 @@ automation:
               - service: telegram_bot.send_message
                 data:
                   chat_id: 133097449
-                  message: "🔒 Válvula agua cerrada"
+                  parse_mode: markdown
+                  message: "🔒 Válvula agua *cerrada*"
         default:
           - service: telegram_bot.send_message
             data:
               chat_id: 133097449
-              message: "Uso: /agua on o /agua off\nEstado: {{ 'Abierta' if is_state('switch.agua', 'on') else 'Cerrada' }}"
+              parse_mode: markdown
+              message: "🚰 *Válvula agua*\nEstado: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}\n\nUso: /agua on o /agua off"
               inline_keyboard:
-                - - text: "Abrir"
+                - - text: "🔓 Abrir"
                     callback_data: "agua_abrir"
-                  - text: "Cerrar"
+                  - text: "🔒 Cerrar"
                     callback_data: "agua_cerrar"
 
   - id: domus_cmd_calef
@@ -503,7 +514,8 @@ automation:
               - service: telegram_bot.send_message
                 data:
                   chat_id: 133097449
-                  message: "♨️ Calefacción encendida"
+                  parse_mode: markdown
+                  message: "♨️ Calefacción *encendida*"
           - conditions:
               - condition: template
                 value_template: "{{ trigger.event.data.args[0] | default('') == 'off' }}"
@@ -514,16 +526,18 @@ automation:
               - service: telegram_bot.send_message
                 data:
                   chat_id: 133097449
-                  message: "❄️ Calefacción apagada"
+                  parse_mode: markdown
+                  message: "❄️ Calefacción *apagada*"
         default:
           - service: telegram_bot.send_message
             data:
               chat_id: 133097449
-              message: "Uso: /calef on o /calef off\nEstado: {{ 'ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}"
+              parse_mode: markdown
+              message: "♨️ *Calefacción*\nEstado: {{ '🔴 ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}\n\nUso: /calef on o /calef off"
               inline_keyboard:
-                - - text: "Encender"
+                - - text: "♨️ Encender"
                     callback_data: "calef_on"
-                  - text: "Apagar"
+                  - text: "❄️ Apagar"
                     callback_data: "calef_off"
 
   - id: domus_cmd_sirena
@@ -543,7 +557,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔕 Sirena apagada"
+          parse_mode: markdown
+          message: "🔕 Sirena *apagada*"
 
   - id: domus_cmd_armar
     alias: "DOMUS Bot - /armar"
@@ -564,7 +579,8 @@ automation:
               - service: telegram_bot.send_message
                 data:
                   chat_id: 133097449
-                  message: "Indica el PIN: /armar XXXX"
+                  parse_mode: markdown
+                  message: "🛡️ Indica el PIN: `/armar XXXX`"
         default:
           - service: mqtt.publish
             data:
@@ -573,7 +589,8 @@ automation:
           - service: telegram_bot.send_message
             data:
               chat_id: 133097449
-              message: "⏳ Activando alarma..."
+              parse_mode: markdown
+              message: "⏳ *Activando alarma...*\nSi el PIN es correcto recibirás confirmación."
 
   - id: domus_cmd_desactivar
     alias: "DOMUS Bot - /desactivar"
@@ -593,7 +610,8 @@ automation:
       - service: telegram_bot.send_message
         data:
           chat_id: 133097449
-          message: "🔓 Alarma desactivada"
+          parse_mode: markdown
+          message: "🔓 *Alarma desactivada*"
 
   # ── CALLBACKS (botones inline) ────────────────────────────────────────────
 
