@@ -452,23 +452,54 @@ static void hm_save() {
     f.close();
 }
 
+// ── Buffer de eventos en RAM ──────────────────────────────────
+// Escribir en flash bloquea el bus PSRAM/flash compartido y produce un glitch
+// en el panel RGB. Para que el display sea fluido, los eventos se encolan en
+// RAM y se vuelcan a flash AGRUPADOS cada pocos segundos (o de inmediato si son
+// críticos). El estado en pantalla NO depende de esto: se refresca al instante
+// desde a6v3.input/output en update_*(), así que el PIR se ve sin retardo.
+static const uint8_t EVT_BUF_N    = 24;
+static EvtRec        evt_buf[EVT_BUF_N];
+static uint8_t       evt_buf_n    = 0;
+static unsigned long evt_flush_ts = 0;
+
+static void flush_events() {
+    if (evt_buf_n == 0) return;
+    File f = LittleFS.open("/evt.bin", "r+");
+    if (!f) f = LittleFS.open("/evt.bin", "w");
+    if (!f) { Serial.println("[HIST] evt open FAIL"); return; }
+    for (uint8_t i = 0; i < evt_buf_n; i++) {
+        f.seek(hist_eh * sizeof(EvtRec));
+        f.write((uint8_t*)&evt_buf[i], sizeof(EvtRec));
+        hist_eh = (hist_eh + 1) % MAX_EVT;
+    }
+    f.close();
+    Preferences p; p.begin("hist", false);
+    p.putUInt("eh", hist_eh); p.end();          // un único commit NVS por lote
+    Serial.printf("[HIST] flush %u evt  eh=%lu\n", evt_buf_n, hist_eh);
+    evt_buf_n = 0;
+}
+
 static void log_event(EvtType type, uint8_t value, uint8_t aux = 0) {
     time_t now = time(NULL);
     if (now < 1000000000L) return; // NTP no sincronizado
     EvtRec r;
     r.ts = (uint32_t)now; r.type = (uint8_t)type;
     r.value = value; r.aux = aux; r.pad = 0;
-    File f = LittleFS.open("/evt.bin", "r+");
-    if (!f) f = LittleFS.open("/evt.bin", "w");
-    if (!f) { Serial.println("[HIST] evt open FAIL"); return; }
-    f.seek(hist_eh * sizeof(EvtRec));
-    f.write((uint8_t*)&r, sizeof(r));
-    f.close();
-    hist_eh = (hist_eh + 1) % MAX_EVT;
-    Preferences p; p.begin("hist", false);
-    p.putUInt("eh", hist_eh); p.end();
-    Serial.printf("[HIST] evt type=%u val=%u aux=%u ts=%lu\n",
-        (unsigned)type, value, aux, r.ts);
+    // Encolar en RAM (sin tocar flash → la pantalla no parpadea)
+    if (evt_buf_n >= EVT_BUF_N) flush_events();   // por si se llena antes del tick
+    evt_buf[evt_buf_n++] = r;
+    // Eventos críticos (raros): persistir ya, para no perderlos ante un corte
+    switch (type) {
+        case EVT_FLOOD: case EVT_SMOKE: case EVT_RELAY_SIRENA:
+        case EVT_ALARM_ARM: case EVT_ALARM_DISARM: case EVT_ALARM_TRIGGER:
+        case EVT_SYSTEM_BOOT:
+            flush_events();
+            break;
+        default: break;   // PRESENCE, relés agua/calef, heat_mode → diferido
+    }
+    Serial.printf("[HIST] evt type=%u val=%u aux=%u ts=%lu (buf=%u)\n",
+        (unsigned)type, value, aux, r.ts, evt_buf_n);
 }
 
 static void log_temp(float ti, float te) {
@@ -1608,6 +1639,7 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
 
 static void log_load() {
     if(!log_label) return;
+    flush_events();   // volcar pendientes en RAM para mostrar lo más reciente
     static char buf[20000];
     buf[0] = '\0';
     int pos = 0;
@@ -2933,6 +2965,8 @@ void loop() {
         hm_save_ts=millis();
         hm_save();
     }
+    // Volcado agrupado de eventos a flash cada 8 s → display fluido
+    if(millis()-evt_flush_ts >= 8000UL){ evt_flush_ts=millis(); flush_events(); }
     // ─────────────────────────────────────────────────────────
 
     // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
