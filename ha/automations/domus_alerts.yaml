@@ -20,7 +20,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🚨 INUNDACIÓN DETECTADA\nSensor de inundación activo. Válvulas cerradas automáticamente."
 
 - id: domus_alert_flood_repeat
@@ -42,7 +42,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🚨 INUNDACIÓN DETECTADA\nSensor de inundación activo. Válvulas cerradas automáticamente."
 
 - id: domus_alert_smoke
@@ -61,7 +61,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🔥 ALARMA HUMO/CALOR\nDetector SFL-910 cocina activo. Sirena encendida."
 
 - id: domus_alert_smoke_repeat
@@ -83,7 +83,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🔥 ALARMA HUMO/CALOR\nDetector SFL-910 cocina activo. Sirena encendida."
 
 - id: domus_alert_intrusion
@@ -102,7 +102,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
 
 - id: domus_alert_intrusion_repeat
@@ -124,7 +124,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🚨 POSIBLE INTRUSIÓN\nMovimiento detectado con alarma armada. Tienes 30s para introducir el PIN."
 
 - id: domus_alert_sounding
@@ -143,7 +143,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🔴 ALARMA ACTIVADA\nLa alarma está sonando en casa."
 
 - id: domus_alert_sounding_repeat
@@ -165,7 +165,7 @@
           importance: high
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🔴 ALARMA ACTIVADA\nLa alarma está sonando en casa."
 
 - id: domus_alert_power_cut
@@ -185,7 +185,7 @@
           tag: domus_power
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC detectada en casa."
 
 - id: domus_alert_power_cut_repeat
@@ -206,7 +206,7 @@
           tag: domus_power
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "⚡ CORTE DE LUZ\nSin alimentación 220VAC detectada en casa."
 
 - id: domus_alert_power_restore
@@ -224,7 +224,7 @@
           tag: domus_power
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "✅ Luz restaurada\nLa alimentación 220VAC ha vuelto."
 
 - id: domus_alert_alarm_armed
@@ -242,7 +242,7 @@
           tag: domus_armed
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🛡️ Alarma armada\nSistema de alarma activado."
 
 - id: domus_alert_alarm_disarmed
@@ -261,5 +261,5 @@
           tag: domus_armed
     - service: telegram_bot.send_message
       data:
-        chat_id: 133097449
+        chat_id: [133097449, 205920636]
         message: "🔓 Alarma desarmada\nSistema de alarma desactivado."

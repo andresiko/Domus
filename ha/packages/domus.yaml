@@ -134,14 +134,12 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "💧 *INUNDACIÓN DETECTADA*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada (auto)' }}"
           inline_keyboard:
-            - - text: "🔓 Abrir válvula"
-                callback_data: "agua_abrir"
-              - text: "🔒 Cerrar válvula"
-                callback_data: "agua_cerrar"
+            - - ["🔓 Abrir válvula", "/agua_abrir"]
+              - ["🔒 Cerrar válvula", "/agua_cerrar"]
 
   - id: domus_tg_flood_repeat
     alias: "DOMUS Telegram - Inundacion repeticion 5min"
@@ -155,14 +153,12 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "💧 *INUNDACIÓN ACTIVA*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}"
           inline_keyboard:
-            - - text: "🔓 Abrir válvula"
-                callback_data: "agua_abrir"
-              - text: "🔒 Cerrar válvula"
-                callback_data: "agua_cerrar"
+            - - ["🔓 Abrir válvula", "/agua_abrir"]
+              - ["🔒 Cerrar válvula", "/agua_cerrar"]
 
   - id: domus_tg_flood_off
     alias: "DOMUS Telegram - Inundacion resuelta"
@@ -173,12 +169,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "✅ *Inundación resuelta*\nVálvula: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}"
           inline_keyboard:
-            - - text: "🔓 Abrir válvula"
-                callback_data: "agua_abrir"
+            - - ["🔓 Abrir válvula", "/agua_abrir"]
 
   - id: domus_tg_smoke_on
     alias: "DOMUS Telegram - Alarma humo calor"
@@ -189,12 +184,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔥 *ALARMA HUMO/CALOR*\nDetector cocina activo\nSirena: {{ '🔴 ON' if is_state('switch.sirena', 'on') else 'OFF' }}"
           inline_keyboard:
-            - - text: "🔕 Apagar sirena"
-                callback_data: "sirena_off"
+            - - ["🔕 Apagar sirena", "/sirena_off"]
 
   - id: domus_tg_smoke_repeat
     alias: "DOMUS Telegram - Humo calor repeticion 5min"
@@ -208,12 +202,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔥 *HUMO/CALOR ACTIVO*\nSirena: {{ '🔴 ON' if is_state('switch.sirena', 'on') else 'OFF' }}"
           inline_keyboard:
-            - - text: "🔕 Apagar sirena"
-                callback_data: "sirena_off"
+            - - ["🔕 Apagar sirena", "/sirena_off"]
 
   - id: domus_tg_alarm_grace
     alias: "DOMUS Telegram - Alarma intrusion grace"
@@ -224,12 +217,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🚨 *POSIBLE INTRUSIÓN*\nMovimiento detectado\n30 segundos para cancelar"
           inline_keyboard:
-            - - text: "🔓 Desactivar alarma"
-                callback_data: "desactivar"
+            - - ["🔓 Desactivar alarma", "/desactivar"]
 
   - id: domus_tg_alarm_grace_repeat
     alias: "DOMUS Telegram - Intrusion repeticion 5min"
@@ -243,12 +235,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🚨 *ALARMA — PERIODO DE GRACIA*"
           inline_keyboard:
-            - - text: "🔓 Desactivar"
-                callback_data: "desactivar"
+            - - ["🔓 Desactivar", "/desactivar"]
 
   - id: domus_tg_alarm_sounding
     alias: "DOMUS Telegram - Alarma sonando"
@@ -259,14 +250,12 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔴 *ALARMA SONANDO*\nSirena activa en casa"
           inline_keyboard:
-            - - text: "🔕 Apagar sirena"
-                callback_data: "sirena_off"
-              - text: "🔓 Desactivar"
-                callback_data: "desactivar"
+            - - ["🔕 Apagar sirena", "/sirena_off"]
+              - ["🔓 Desactivar", "/desactivar"]
 
   - id: domus_tg_alarm_sounding_repeat
     alias: "DOMUS Telegram - Alarma sonando repeticion 5min"
@@ -280,14 +269,12 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔴 *ALARMA SONANDO*"
           inline_keyboard:
-            - - text: "🔕 Apagar sirena"
-                callback_data: "sirena_off"
-              - text: "🔓 Desactivar"
-                callback_data: "desactivar"
+            - - ["🔕 Apagar sirena", "/sirena_off"]
+              - ["🔓 Desactivar", "/desactivar"]
 
   - id: domus_tg_power_off
     alias: "DOMUS Telegram - Corte de luz"
@@ -300,7 +287,7 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "⚡ *CORTE DE LUZ*\nSin alimentación 220VAC"
 
@@ -313,7 +300,7 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "✅ *Luz restaurada*\nAlimentación 220VAC OK"
 
@@ -326,7 +313,7 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🛡️ *Alarma armada*"
 
@@ -340,7 +327,7 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔓 *Alarma desarmada*"
 
@@ -353,12 +340,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔓 Válvula agua *abierta*"
           inline_keyboard:
-            - - text: "🔒 Cerrar válvula"
-                callback_data: "agua_cerrar"
+            - - ["🔒 Cerrar válvula", "/agua_cerrar"]
 
   - id: domus_tg_agua_off
     alias: "DOMUS Telegram - Valvula agua cerrada"
@@ -369,12 +355,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔒 Válvula agua *cerrada*"
           inline_keyboard:
-            - - text: "🔓 Abrir válvula"
-                callback_data: "agua_abrir"
+            - - ["🔓 Abrir válvula", "/agua_abrir"]
 
   - id: domus_tg_temp_low
     alias: "DOMUS Telegram - Temperatura baja"
@@ -387,12 +372,11 @@ automation:
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🥶 *Temperatura baja*\nInterior: {{ states('sensor.temperatura_interior') }}°C"
           inline_keyboard:
-            - - text: "♨️ Encender calefacción"
-                callback_data: "calef_on"
+            - - ["♨️ Encender calefacción", "/calef_on"]
 
   # ── COMANDOS ─────────────────────────────────────────────────────────────
 
@@ -400,16 +384,16 @@ automation:
     alias: "DOMUS Bot - /estado"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/estado"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: |-
             🏠 *DOMUS — Estado*
@@ -431,16 +415,16 @@ automation:
     alias: "DOMUS Bot - /temp"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/temp"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🌡️ Interior: *{{ states('sensor.temperatura_interior') }}°C*\n💧 Humedad: {{ states('sensor.humedad') }}%"
 
@@ -448,12 +432,12 @@ automation:
     alias: "DOMUS Bot - /agua"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/agua"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - choose:
           - conditions:
@@ -465,7 +449,7 @@ automation:
                   entity_id: switch.agua
               - service: telegram_bot.send_message
                 data:
-                  chat_id: 133097449
+                  chat_id: [133097449, 205920636]
                   parse_mode: markdown
                   message: "🔓 Válvula agua *abierta*"
           - conditions:
@@ -477,31 +461,29 @@ automation:
                   entity_id: switch.agua
               - service: telegram_bot.send_message
                 data:
-                  chat_id: 133097449
+                  chat_id: [133097449, 205920636]
                   parse_mode: markdown
                   message: "🔒 Válvula agua *cerrada*"
         default:
           - service: telegram_bot.send_message
             data:
-              chat_id: 133097449
+              chat_id: [133097449, 205920636]
               parse_mode: markdown
               message: "🚰 *Válvula agua*\nEstado: {{ '🔓 Abierta' if is_state('switch.agua', 'on') else '🔒 Cerrada' }}\n\nUso: /agua on o /agua off"
               inline_keyboard:
-                - - text: "🔓 Abrir"
-                    callback_data: "agua_abrir"
-                  - text: "🔒 Cerrar"
-                    callback_data: "agua_cerrar"
+                - - ["🔓 Abrir", "/agua_abrir"]
+                  - ["🔒 Cerrar", "/agua_cerrar"]
 
   - id: domus_cmd_calef
     alias: "DOMUS Bot - /calef"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/calef"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - choose:
           - conditions:
@@ -513,7 +495,7 @@ automation:
                   entity_id: switch.calefaccion_relay
               - service: telegram_bot.send_message
                 data:
-                  chat_id: 133097449
+                  chat_id: [133097449, 205920636]
                   parse_mode: markdown
                   message: "♨️ Calefacción *encendida*"
           - conditions:
@@ -525,38 +507,36 @@ automation:
                   entity_id: switch.calefaccion_relay
               - service: telegram_bot.send_message
                 data:
-                  chat_id: 133097449
+                  chat_id: [133097449, 205920636]
                   parse_mode: markdown
                   message: "❄️ Calefacción *apagada*"
         default:
           - service: telegram_bot.send_message
             data:
-              chat_id: 133097449
+              chat_id: [133097449, 205920636]
               parse_mode: markdown
               message: "♨️ *Calefacción*\nEstado: {{ '🔴 ON' if is_state('switch.calefaccion_relay', 'on') else 'OFF' }}\n\nUso: /calef on o /calef off"
               inline_keyboard:
-                - - text: "♨️ Encender"
-                    callback_data: "calef_on"
-                  - text: "❄️ Apagar"
-                    callback_data: "calef_off"
+                - - ["♨️ Encender", "/calef_on"]
+                  - ["❄️ Apagar", "/calef_off"]
 
   - id: domus_cmd_sirena
     alias: "DOMUS Bot - /sirena"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/sirena"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_off
         target:
           entity_id: switch.sirena
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔕 Sirena *apagada*"
 
@@ -564,12 +544,12 @@ automation:
     alias: "DOMUS Bot - /armar"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/armar"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - choose:
           - conditions:
@@ -578,7 +558,7 @@ automation:
             sequence:
               - service: telegram_bot.send_message
                 data:
-                  chat_id: 133097449
+                  chat_id: [133097449, 205920636]
                   parse_mode: markdown
                   message: "🛡️ Indica el PIN: `/armar XXXX`"
         default:
@@ -588,7 +568,7 @@ automation:
               payload: '{"cmd":"arm","pin":"{{ trigger.event.data.args[0] }}"}'
           - service: telegram_bot.send_message
             data:
-              chat_id: 133097449
+              chat_id: [133097449, 205920636]
               parse_mode: markdown
               message: "⏳ *Activando alarma...*\nSi el PIN es correcto recibirás confirmación."
 
@@ -596,12 +576,12 @@ automation:
     alias: "DOMUS Bot - /desactivar"
     trigger:
       - platform: event
-        event_type: telegram_bot.command_received
+        event_type: telegram_command
         event_data:
           command: "/desactivar"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: mqtt.publish
         data:
@@ -609,7 +589,7 @@ automation:
           payload: '{"cmd":"disarm"}'
       - service: telegram_bot.send_message
         data:
-          chat_id: 133097449
+          chat_id: [133097449, 205920636]
           parse_mode: markdown
           message: "🔓 *Alarma desactivada*"
 
@@ -619,12 +599,12 @@ automation:
     alias: "DOMUS Bot - Boton apagar sirena"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "sirena_off"
+          data: "/sirena_off"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_off
         target:
@@ -638,12 +618,12 @@ automation:
     alias: "DOMUS Bot - Boton desactivar alarma"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "desactivar"
+          data: "/desactivar"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: mqtt.publish
         data:
@@ -658,12 +638,12 @@ automation:
     alias: "DOMUS Bot - Boton abrir valvula"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "agua_abrir"
+          data: "/agua_abrir"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_on
         target:
@@ -677,12 +657,12 @@ automation:
     alias: "DOMUS Bot - Boton cerrar valvula"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "agua_cerrar"
+          data: "/agua_cerrar"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_off
         target:
@@ -696,12 +676,12 @@ automation:
     alias: "DOMUS Bot - Boton encender calefaccion"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "calef_on"
+          data: "/calef_on"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_on
         target:
@@ -715,12 +695,12 @@ automation:
     alias: "DOMUS Bot - Boton apagar calefaccion"
     trigger:
       - platform: event
-        event_type: telegram_bot.callback_query_received
+        event_type: telegram_callback
         event_data:
-          data: "calef_off"
+          data: "/calef_off"
     condition:
       - condition: template
-        value_template: "{{ trigger.event.data.chat_id | string == '133097449' }}"
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
       - service: switch.turn_off
         target:
