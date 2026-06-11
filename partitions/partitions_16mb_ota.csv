@@ -1,0 +1,9 @@
+# DOMUS — particiones 16MB CON OTA (dual app)
+# Mantiene nvs (0x9000) y littlefs (0x390000) en su sitio → histórico INTACTO.
+# ota_0 = misma posición que la antigua app0; ota_1 va en los 8MB libres superiores.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x5000
+otadata,  data, ota,     0xe000,   0x2000
+ota_0,    app,  ota_0,   0x10000,  0x380000
+littlefs, data, spiffs,  0x390000, 0x470000
+ota_1,    app,  ota_1,   0x800000, 0x380000

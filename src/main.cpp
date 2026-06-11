@@ -1,8 +1,9 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.19"
+#define FW_VERSION "v2.25"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
+#include <ArduinoOTA.h>
 #include <Arduino_GFX_Library.h>
 #include <lvgl.h>
 #include <sMQTTBroker.h>
@@ -2713,6 +2714,11 @@ void setup() {
             char buf[40]; snprintf(buf,sizeof(buf),"IP: %s",WiFi.localIP().toString().c_str());
             lv_label_set_text(lbl_settings_ip,buf);
         }
+        // OTA por WiFi — actualizar firmware sin desmontar la pantalla
+        ArduinoOTA.setHostname("domus-crowpanel");
+        ArduinoOTA.setPassword("domusota");
+        ArduinoOTA.begin();
+        Serial.println("OTA listo (domus-crowpanel)");
     }
     broker.init(1883);
 
@@ -2749,6 +2755,7 @@ static unsigned long heat_blink_ts=0;
 static bool heat_blink_state=false;
 
 void loop() {
+    ArduinoOTA.handle();
     broker.update();
 
     // Procesar swipe detectado en touch_read_cb (fuera de ISR/callback)
