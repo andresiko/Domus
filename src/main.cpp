@@ -1260,6 +1260,11 @@ static void fmt_hm(uint32_t epoch_min, char *buf, int n) {
     time_t t=(time_t)(epoch_min*60); struct tm tm; localtime_r(&t,&tm);
     snprintf(buf,n,"%02d:%02d",tm.tm_hour,tm.tm_min);
 }
+static void fmt_dm(uint32_t epoch_min, char *buf, int n) {  // DD/MM para zoom alejado
+    if(!epoch_min){ snprintf(buf,n,"--/--"); return; }
+    time_t t=(time_t)(epoch_min*60); struct tm tm; localtime_r(&t,&tm);
+    snprintf(buf,n,"%02d/%02d",tm.tm_mday,tm.tm_mon+1);
+}
 
 static void graph_update_ylabels() {
     if(!chart_temp) return;
@@ -1277,9 +1282,10 @@ static void graph_update_ylabels() {
 
 static void graph_update_xlabels() {
     char b[8];
-    if(lbl_graph_t0){ fmt_hm(graph_t0m,b,sizeof(b)); lv_label_set_text(lbl_graph_t0,b); }
-    if(lbl_graph_t1){ fmt_hm(graph_t1m,b,sizeof(b)); lv_label_set_text(lbl_graph_t1,b); }
-    if(lbl_graph_t2){ fmt_hm(graph_t2m,b,sizeof(b)); lv_label_set_text(lbl_graph_t2,b); }
+    bool days = graph_zoom_h >= 48;   // ventana >=2 dias → eje X por dia (DD/MM)
+    if(lbl_graph_t0){ days?fmt_dm(graph_t0m,b,sizeof(b)):fmt_hm(graph_t0m,b,sizeof(b)); lv_label_set_text(lbl_graph_t0,b); }
+    if(lbl_graph_t1){ days?fmt_dm(graph_t1m,b,sizeof(b)):fmt_hm(graph_t1m,b,sizeof(b)); lv_label_set_text(lbl_graph_t1,b); }
+    if(lbl_graph_t2){ days?fmt_dm(graph_t2m,b,sizeof(b)):fmt_hm(graph_t2m,b,sizeof(b)); lv_label_set_text(lbl_graph_t2,b); }
     if(lbl_graph_zoom){
         char zb[8];
         if(graph_zoom_h>=24) snprintf(zb,sizeof(zb),"%lud",(unsigned long)(graph_zoom_h/24));
@@ -2334,6 +2340,7 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_detail,flood?"Valvulas cerradas auto.":"Sirena activada");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"DESACTIVAR");
         mqtt_publish_status();
+        set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
         go_to(SCR_ALARM_CRIT);
     }
     if(alarm_state==AS_ARMED&&!a6v3.input[4]&&!intruder_active){
@@ -2343,6 +2350,7 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_detail,"Introduce PIN para desarmar");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"INTRODUCIR PIN");
         mqtt_publish_status();
+        set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
         go_to(SCR_ALARM_CRIT);
     }
 }
@@ -2870,7 +2878,7 @@ void loop() {
     }
     // ─────────────────────────────────────────────────────────────
 
-    if(cfg_dim_delay>0&&!screen_dimmed)
+    if(cfg_dim_delay>0&&!screen_dimmed&&alarm_state<AS_GRACE)  // no atenuar con alarma activa (GRACE/SOUNDING)
         if(millis()-last_touch_ms>(unsigned long)cfg_dim_delay*60000UL){
             set_brightness(cfg_dim_brightness); screen_dimmed=true; }
 
