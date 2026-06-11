@@ -113,7 +113,7 @@ static void start_beep_seq(int n, int dur=100, int pause=200) {
 
 // ── Tiempo / Open-Meteo ──────────────────────────────────────
 struct {
-    float temp=NAN; float wind=0; float rain_now=0; bool ok=false;
+    float temp=NAN; float wind=0; float rain_now=0; bool ok=false; int code=-1;
     float h_temp[12]={}; float h_rain[12]={};
 } wx;
 static unsigned long wx_last = 0;
@@ -121,7 +121,7 @@ static unsigned long wx_last = 0;
     "?latitude=42.80632457618044&longitude=-1.6290100870212767" \
     "&current=temperature_2m,wind_speed_10m,precipitation" \
     "&hourly=precipitation,wind_speed_10m,temperature_2m" \
-    "&forecast_days=1&timezone=Europe%2FMadrid"
+    "&daily=weather_code&forecast_days=1&timezone=Europe%2FMadrid"
 
 // ── Tuya API ─────────────────────────────────────────────────
 #define TUYA_CLIENT_ID     "df33cuper4k8ce7qstn8"
@@ -294,6 +294,8 @@ static uint8_t tile_col = 1, tile_row = 1; // posición actual (home=1,1)
 static lv_obj_t *harc[5], *rarc[4], *arc_alarm_zone, *arc_settings_zone, *lbl_alarm_badge;
 static lv_obj_t *lbl_sistema = nullptr, *lbl_temp_ext, *lbl_weather, *lbl_temp_int, *lbl_humidity;
 static lv_obj_t *lbl_wx_forecast = nullptr;
+static lv_obj_t *lbl_wx_icon     = nullptr;
+extern "C" const lv_font_t weather_font;  // src/weather_font.c — iconos MDI del tiempo
 
 // Historial tile
 static lv_obj_t *btn_hist[3] = {}; // Temperatura, Presencia, Registro
@@ -458,10 +460,9 @@ static void hm_save() {
 // RAM y se vuelcan a flash AGRUPADOS cada pocos segundos (o de inmediato si son
 // críticos). El estado en pantalla NO depende de esto: se refresca al instante
 // desde a6v3.input/output en update_*(), así que el PIR se ve sin retardo.
-static const uint8_t EVT_BUF_N    = 24;
+static const uint8_t EVT_BUF_N    = 50;
 static EvtRec        evt_buf[EVT_BUF_N];
 static uint8_t       evt_buf_n    = 0;
-static unsigned long evt_flush_ts = 0;
 
 static void flush_events() {
     if (evt_buf_n == 0) return;
@@ -963,8 +964,16 @@ static void build_tile_home() {
     lv_obj_add_flag(circle,LV_OBJ_FLAG_EVENT_BUBBLE);
 
     lbl_temp_ext   =centered_label(tile_home,"--.-\xc2\xb0""C",    &lv_font_montserrat_40,COL_TEXT, -100);
-    lbl_weather    =centered_label(tile_home,"-- km/h  0.0 mm/h", &lv_font_montserrat_14,COL_MUTED, -58);
-    lbl_wx_forecast=centered_label(tile_home,"Prev: --\xc2\xb0 / --\xc2\xb0",&lv_font_montserrat_14,COL_MUTED,-28);
+    // Meteo más grande a la izquierda + icono del tiempo grande a la derecha
+    lbl_weather    =centered_label(tile_home,"-- km/h  0.0 mm/h", &lv_font_montserrat_20,COL_MUTED, -50);
+    lv_obj_align(lbl_weather, LV_ALIGN_CENTER, -34, -50);
+    lbl_wx_forecast=centered_label(tile_home,"--\xc2\xb0 / --\xc2\xb0",&lv_font_montserrat_20,COL_MUTED,-22);
+    lv_obj_align(lbl_wx_forecast, LV_ALIGN_CENTER, -34, -22);
+    lbl_wx_icon    =lv_label_create(tile_home);
+    lv_obj_set_style_text_font(lbl_wx_icon,&weather_font,0);
+    lv_obj_set_style_text_color(lbl_wx_icon,lv_color_hex(COL_TEXT),0);
+    lv_label_set_text(lbl_wx_icon,"");
+    lv_obj_align(lbl_wx_icon, LV_ALIGN_CENTER, 92, -34);
 
     // Heating active indicator — hidden by default, blinks in loop() when heat_mode != HM_OFF
     lbl_heat_active=lv_obj_create(tile_home);
@@ -985,7 +994,7 @@ static void build_tile_home() {
       lv_obj_center(hl); }
 
     lbl_temp_int   =centered_label(tile_home,"--.-\xc2\xb0""C",    &lv_font_montserrat_48,COL_TEXT,  100);
-    lbl_humidity   =centered_label(tile_home,"--% HR",             &lv_font_montserrat_14,COL_MUTED, 148);
+    lbl_humidity   =centered_label(tile_home,"--% HR",             &lv_font_montserrat_20,COL_MUTED, 148);
 }
 
 // ── BUILD TILE HISTORIAL ─────────────────────────────────────
@@ -1506,7 +1515,7 @@ static void hm_update_week_label() {
     time_t sunday = monday + 6L*86400L;
     struct tm m, s; localtime_r(&monday,&m); localtime_r(&sunday,&s);
     char buf[22];
-    snprintf(buf,sizeof(buf),"%02d/%02d — %02d/%02d/%04d",
+    snprintf(buf,sizeof(buf),"%02d/%02d - %02d/%02d/%04d",
         m.tm_mday,m.tm_mon+1, s.tm_mday,s.tm_mon+1,s.tm_year+1900);
     lv_label_set_text(lbl_hm_week, buf);
 }
@@ -1537,7 +1546,7 @@ static void hm_draw_event(lv_event_t *e) {
     if(hm_week_off==0)
         for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
     lv_color_t c_lo = lv_color_hex(0x151515);
-    lv_color_t c_hi = lv_color_hex(0x0A9FFF);
+    lv_color_t c_hi = lv_color_hex(0x0050FF);  // swap→0xFF5000 naranja-rojo (mas contraste)
     lv_draw_rect_dsc_t dsc;
     lv_draw_rect_dsc_init(&dsc);
     dsc.border_width=0; dsc.radius=0; dsc.bg_opa=LV_OPA_COVER;
@@ -2241,6 +2250,22 @@ static void update_alarm_tile() {
         lv_obj_set_style_bg_color(btn_arm,lv_color_hex(COL_RELAY_DIM),0);
     }
 }
+// Mapa código WMO (open-meteo) → glyph MDI de weather_font (UTF-8)
+static const char* wmo_icon(int c) {
+    if(c<0)          return "";
+    if(c==0)         return "\xF3\xB0\x96\x99"; // despejado → sunny
+    if(c<=2)         return "\xF3\xB0\x96\x95"; // poco nuboso → partly-cloudy
+    if(c==3)         return "\xF3\xB0\x96\x90"; // nublado → cloudy
+    if(c==45||c==48) return "\xF3\xB0\x96\x91"; // niebla → fog
+    if(c>=51&&c<=57) return "\xF3\xB0\x96\x97"; // llovizna → rainy
+    if(c>=61&&c<=65) return "\xF3\xB0\x96\x96"; // lluvia → pouring
+    if(c==66||c==67) return "\xF3\xB0\x99\xBF"; // aguanieve → snowy-rainy
+    if(c>=71&&c<=77) return "\xF3\xB0\x96\x98"; // nieve → snowy
+    if(c>=80&&c<=82) return "\xF3\xB0\x96\x96"; // chubascos → pouring
+    if(c==85||c==86) return "\xF3\xB0\x96\x98"; // chubascos nieve → snowy
+    if(c>=95)        return "\xF3\xB0\x96\x93"; // tormenta → lightning
+    return "\xF3\xB0\x96\x90";                  // fallback → cloudy
+}
 static void update_weather_display() {
     if(!wx.ok) return;
     char buf[40];
@@ -2258,6 +2283,7 @@ static void update_weather_display() {
         snprintf(buf,sizeof(buf),"%.0f\xc2\xb0 / %.0f\xc2\xb0  %.1fmm",tmax,tmin,rsum);
         lv_label_set_text(lbl_wx_forecast,buf);
     }
+    if(lbl_wx_icon) lv_label_set_text(lbl_wx_icon, wmo_icon(wx.code));
 }
 
 // ── ESTADO BROKER ────────────────────────────────────────────
@@ -2539,7 +2565,7 @@ static void fetch_weather() {
                 wx.h_temp[i]=doc["hourly"]["temperature_2m"][i].as<float>();
                 wx.h_rain[i]=doc["hourly"]["precipitation"][i].as<float>();
             }
-            wx.wind=wmax; wx.ok=true;
+            wx.wind=wmax; wx.code=doc["daily"]["weather_code"][0] | -1; wx.ok=true;
             update_weather_display();
         }
     }
@@ -2769,6 +2795,14 @@ void loop() {
                 Serial.printf("[ENC] hist d=%d steps=%d sel:%d->%d\n",d,steps,hist_menu_sel,((hist_menu_sel+steps)%4+4)%4);
                 hist_menu_set_sel(((hist_menu_sel+steps)%4+4)%4);
             }
+        } else if(cur_scr==SCR_HEATMAP){
+            enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
+            if(steps!=0){
+                hm_week_off += steps;            // CCW→semanas pasadas, CW→volver al presente
+                if(hm_week_off>0) hm_week_off=0; // no hay futuro
+                hm_update_week_label();
+                if(hm_view) lv_obj_invalidate(hm_view);
+            }
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
@@ -2965,8 +2999,9 @@ void loop() {
         hm_save_ts=millis();
         hm_save();
     }
-    // Volcado agrupado de eventos a flash cada 8 s → display fluido
-    if(millis()-evt_flush_ts >= 8000UL){ evt_flush_ts=millis(); flush_events(); }
+    // Volcado a flash SOLO con la pantalla en dim (atenuada, el glitch no se ve).
+    // Despierta los eventos se acumulan en RAM (hasta EVT_BUF_N) sin tocar flash.
+    if(screen_dimmed && evt_buf_n>0) flush_events();
     // ─────────────────────────────────────────────────────────
 
     // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
