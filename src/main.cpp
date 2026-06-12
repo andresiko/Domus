@@ -461,9 +461,12 @@ static void hm_save() {
 // RAM y se vuelcan a flash AGRUPADOS cada pocos segundos (o de inmediato si son
 // críticos). El estado en pantalla NO depende de esto: se refresca al instante
 // desde a6v3.input/output en update_*(), así que el PIR se ve sin retardo.
-static const uint8_t EVT_BUF_N    = 50;
-static EvtRec        evt_buf[EVT_BUF_N];
-static uint8_t       evt_buf_n    = 0;
+static const uint16_t EVT_BUF_N   = 250;
+static EvtRec         evt_buf[EVT_BUF_N];
+static uint16_t       evt_buf_n   = 0;
+static uint32_t       g_nflush    = 0;  // telemetria: nº grabaciones a flash
+static uint32_t       g_nevt      = 0;  // telemetria: nº eventos encolados
+static uint32_t       g_dropped   = 0;  // telemetria: nº descartados (buffer lleno despierto)
 
 static void flush_events() {
     if (evt_buf_n == 0) return;
@@ -478,7 +481,8 @@ static void flush_events() {
     f.close();
     Preferences p; p.begin("hist", false);
     p.putUInt("eh", hist_eh); p.end();          // un único commit NVS por lote
-    Serial.printf("[HIST] flush %u evt  eh=%lu\n", evt_buf_n, hist_eh);
+    g_nflush++;
+    Serial.printf("[HIST] flush %u evt  eh=%lu  nflush=%lu\n", (unsigned)evt_buf_n, hist_eh, (unsigned long)g_nflush);
     evt_buf_n = 0;
 }
 
@@ -488,8 +492,11 @@ static void log_event(EvtType type, uint8_t value, uint8_t aux = 0) {
     EvtRec r;
     r.ts = (uint32_t)now; r.type = (uint8_t)type;
     r.value = value; r.aux = aux; r.pad = 0;
-    // Encolar en RAM (sin tocar flash → la pantalla no parpadea)
-    if (evt_buf_n >= EVT_BUF_N) flush_events();   // por si se llena antes del tick
+    g_nevt++;
+    // Encolar en RAM (sin tocar flash → la pantalla no parpadea).
+    // Tope (EVT_BUF_N): graba todo aunque esté despierta — glitch rarísimo (con dim a
+    // 1 min nunca se llega), pero así no se pierde ningún evento.
+    if (evt_buf_n >= EVT_BUF_N) flush_events();
     evt_buf[evt_buf_n++] = r;
     // Eventos críticos (raros): persistir ya, para no perderlos ante un corte
     switch (type) {
@@ -2485,6 +2492,15 @@ static bool tuya_get_token() {
     }
     http.end(); return ok;
 }
+static void mqtt_publish_debug() {  // telemetria del buffer de eventos → DOMUS/debug
+    char dbg[140];
+    snprintf(dbg,sizeof(dbg),
+        "{\"buf\":%u,\"max\":%u,\"eh\":%lu,\"nflush\":%lu,\"nevt\":%lu,\"dropped\":%lu,\"dim\":%s}",
+        (unsigned)evt_buf_n,(unsigned)EVT_BUF_N,(unsigned long)hist_eh,
+        (unsigned long)g_nflush,(unsigned long)g_nevt,(unsigned long)g_dropped,
+        screen_dimmed?"true":"false");
+    broker.publish("DOMUS/debug", std::string(dbg));
+}
 static void mqtt_publish_status() {
     const char *as =
         alarm_state==AS_OFF     ?"OFF"     :
@@ -3014,9 +3030,12 @@ void loop() {
         hm_save_ts=millis();
         hm_save();
     }
-    // Volcado a flash SOLO con la pantalla en dim (atenuada, el glitch no se ve).
-    // Despierta los eventos se acumulan en RAM (hasta EVT_BUF_N) sin tocar flash.
-    if(screen_dimmed && evt_buf_n>0) flush_events();
+    // Volcado a flash con la pantalla en dim (atenuada, el glitch no se ve), pero solo
+    // si hay >=50 acumulados → agrupa escrituras y reduce desgaste de flash.
+    if(screen_dimmed && evt_buf_n>=50) flush_events();
+    // Chivato del buffer por MQTT cada 8s (telemetria; quitar tras diagnostico)
+    { static unsigned long dbg_last=0;
+      if(millis()-dbg_last>=8000UL){ dbg_last=millis(); mqtt_publish_debug(); } }
     // ─────────────────────────────────────────────────────────
 
     // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
