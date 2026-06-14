@@ -6,6 +6,7 @@
     - platform: state
       entity_id: binary_sensor.inundacion
       to: "on"
+      not_from: ["unavailable", "unknown"]
   condition:
     - condition: state
       entity_id: binary_sensor.inundacion
@@ -51,6 +52,7 @@
     - platform: state
       entity_id: binary_sensor.humo_calor
       to: "on"
+      not_from: ["unavailable", "unknown"]
   action:
     - service: notify.mobile_app_oneplus
       data:
@@ -92,6 +94,7 @@
     - platform: state
       entity_id: sensor.estado_alarma
       to: "GRACE"
+      not_from: ["unavailable", "unknown"]
   action:
     - service: notify.mobile_app_oneplus
       data:
@@ -133,6 +136,7 @@
     - platform: state
       entity_id: sensor.estado_alarma
       to: "SOUNDING"
+      not_from: ["unavailable", "unknown"]
   action:
     - service: notify.mobile_app_oneplus
       data:
@@ -174,6 +178,7 @@
     - platform: state
       entity_id: binary_sensor.red_electrica
       to: "off"
+      not_from: ["unavailable", "unknown"]
       for:
         seconds: 10
   action:
@@ -215,6 +220,7 @@
     - platform: state
       entity_id: binary_sensor.red_electrica
       to: "on"
+      not_from: ["unavailable", "unknown"]
   action:
     - service: notify.mobile_app_oneplus
       data:
@@ -233,6 +239,7 @@
     - platform: state
       entity_id: sensor.estado_alarma
       to: "ARMED"
+      not_from: ["unavailable", "unknown"]
   action:
     - service: notify.mobile_app_oneplus
       data:
