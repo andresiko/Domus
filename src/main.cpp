@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.26"
+#define FW_VERSION "v2.27"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -173,6 +173,15 @@ public:
                         else
                             Serial.println("[CMD] arm via MQTT: PIN incorrecto");
                     }
+                }
+                return true;
+            }
+            if (p->Topic() == "DOMUS/ENV") {   // Tª/H interior desde HA (Xiaomi BLE), JSON {"t":21.5,"h":53}
+                JsonDocument doc;
+                if (!deserializeJson(doc, p->Payload().c_str(), p->Payload().size())) {
+                    if (!doc["t"].isNull()) tuya_temp_int = doc["t"].as<float>();
+                    if (!doc["h"].isNull()) tuya_humidity = doc["h"].as<float>();
+                    ui_needs_update = true;
                 }
                 return true;
             }
@@ -2424,6 +2433,19 @@ static void update_home() {
         lv_obj_set_style_bg_color(arc_alarm_zone,lv_color_hex(alarm_armed?COL_ALERT:COL_ZONE_ALARM),0);
     lv_label_set_text(lbl_alarm_badge,alarm_armed?"ALARMA\nON":"ALARMA\nOFF");
     lv_obj_set_style_text_color(lbl_alarm_badge,lv_color_hex(alarm_armed?COL_ALERT:COL_MUTED),0);
+    // Temp/humedad interior — fuente: MQTT DOMUS/ENV (HA publica el Xiaomi BLE)
+    if(lbl_temp_int){
+        char b[12];
+        if(isnan(tuya_temp_int)) snprintf(b,sizeof(b),"--.-\xc2\xb0""C");
+        else                     snprintf(b,sizeof(b),"%.1f\xc2\xb0""C",tuya_temp_int);
+        lv_label_set_text(lbl_temp_int,b);
+    }
+    if(lbl_humidity){
+        char b[12];
+        if(isnan(tuya_humidity)) snprintf(b,sizeof(b),"--%% HR");
+        else                     snprintf(b,sizeof(b),"%.0f%% HR",tuya_humidity);
+        lv_label_set_text(lbl_humidity,b);
+    }
 }
 static void update_sensors_tile() { /* sensors tile replaced by hist tile */ }
 static void update_relays_tile() {
@@ -2944,7 +2966,7 @@ void setup() {
 
     last_touch_ms=millis();
     fetch_weather();
-    fetch_tuya_temp();
+    // Tª/H interior ya no se baja de la nube Tuya: llega por MQTT (DOMUS/ENV, HA→Xiaomi)
 
     // ENC_SW detectado en BIT5 del PCF8574 (I2C 0x21), activo LOW.
     // Se lee por polling en loop() cada 25ms — no se usa interrupt de GPIO.
@@ -3283,7 +3305,7 @@ void loop() {
 
     if(scr_change){ scr_change=false; do_switch(pend_scr); }
     if(millis()-wx_last  >30UL*60000UL) fetch_weather();
-    if(millis()-tuya_last> 5UL*60000UL) fetch_tuya_temp();
+    // (Tª interior llega por MQTT DOMUS/ENV; ya no se consulta la nube Tuya)
     { static unsigned long domus_pub_last=0;
       if(millis()-domus_pub_last>=60000UL){ domus_pub_last=millis(); mqtt_publish_status(); } }
 

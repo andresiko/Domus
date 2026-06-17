@@ -121,6 +121,35 @@ mqtt:
 
 automation:
 
+  # ── FUENTE Tª/H INTERIOR (Xiaomi BLE local → panel por MQTT) ──────────────
+  - id: domus_env_xiaomi_to_panel
+    alias: "DOMUS - Publicar Tª/H Xiaomi al panel (MQTT)"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.temperature_humidity_sensor_a5ef_temperature
+          - sensor.temperature_humidity_sensor_a5ef_humidity
+        for:
+          seconds: 3
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: template
+        value_template: >-
+          {{ is_number(states('sensor.temperature_humidity_sensor_a5ef_temperature'))
+             and is_number(states('sensor.temperature_humidity_sensor_a5ef_humidity')) }}
+    action:
+      - service: mqtt.publish
+        data:
+          topic: "DOMUS/ENV"
+          retain: true
+          payload: >-
+            {"t": {{ states('sensor.temperature_humidity_sensor_a5ef_temperature') }}, "h": {{ states('sensor.temperature_humidity_sensor_a5ef_humidity') }}}
+
   # ── NOTIFICACIONES ───────────────────────────────────────────────────────
 
   - id: domus_tg_flood_on
