@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.25"
+#define FW_VERSION "v2.26"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -52,8 +52,10 @@ Arduino_RGB_Display *display = new Arduino_RGB_Display(
 // ── NVS ──────────────────────────────────────────────────────
 static Preferences prefs;
 static int cfg_brightness     = 200;
-static int cfg_dim_delay      = 5;
-static int cfg_dim_brightness = 5;   // brillo al hacer dim (1-100)
+static int cfg_dim_delay      = 2;   // min hasta atenuar (0=nunca)
+static int cfg_dim_brightness = 5;   // brillo al hacer dim (1-100 %)
+static int cfg_off_delay      = 10;  // min hasta apagar/salvapantallas (0=nunca, >=dim)
+static uint8_t cfg_saver_mode = 2;   // salvapantallas: 0=Off(apagar) 1=On(siempre) 2=Solo si calefaccion
 static uint8_t cfg_anim       = 0;   // 0=ninguna 1=deslizar
 
 // ── Calefacción ───────────────────────────────────────────────
@@ -65,9 +67,13 @@ static uint64_t cfg_prog[7]   = {};  // bit r = slot r activo (30min), 48 slots/
 static float    tuya_temp_int = NAN;
 static float    tuya_humidity = NAN;
 
-// ── Auto-dim ─────────────────────────────────────────────────
+// ── Auto-dim / apagado / salvapantallas ──────────────────────
 static unsigned long last_touch_ms = 0;
-static bool          screen_dimmed = false;
+static bool          screen_dimmed = false;  // true en DIM o en APAGADO/salvapantallas
+static bool          screen_off    = false;  // true en fase de apagado (negro o salvapantallas)
+static bool          saver_active  = false;  // salvapantallas cargado en pantalla
+static bool          wake_reload_pending = false; // recargar pantalla previa fuera de callbacks
+static lv_obj_t     *scr_before_saver = nullptr;
 
 // ── Encoder ──────────────────────────────────────────────────
 static volatile int  enc_delta       = 0;
@@ -204,7 +210,22 @@ static void lcd_power_on() {
     pcf8574_write(0xFF); delay(100);
 }
 static void set_brightness(int val) {
-    ledcWrite(0, (uint32_t)constrain(val, 10, 255));
+    ledcWrite(0, (uint32_t)constrain(val, 0, 255));  // 0 = retro apagada del todo
+}
+// Brillo del DIM: cfg_dim_brightness es 1-100 % → PWM (suelo 2 para "casi apagado")
+static void apply_dim_brightness() {
+    int pwm = cfg_dim_brightness * 255 / 100;
+    if (pwm < 2) pwm = 2;
+    set_brightness(pwm);
+}
+// Despierta la pantalla a brillo pleno. Si 'reload', recarga la pantalla previa
+// al salvapantallas (diferido al loop; nunca llamar lv_scr_load desde callbacks
+// de input). Para casos donde sigue un go_to(), usar reload=false.
+static void request_wake(bool reload) {
+    last_touch_ms = millis();
+    set_brightness(cfg_brightness);
+    screen_dimmed = false; screen_off = false;
+    if (saver_active) { saver_active = false; if (reload) wake_reload_pending = true; }
 }
 
 // ── LVGL flush ───────────────────────────────────────────────
@@ -251,7 +272,7 @@ static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
             int16_t tx = ((xh&0x0F)<<8)|xl;
             int16_t ty = ((yh&0x0F)<<8)|yl;
             last_touch_ms = millis();
-            if (screen_dimmed) { set_brightness(cfg_brightness); screen_dimmed = false; }
+            if (screen_dimmed) request_wake(true);
             if (!sw_down) { sw_sx=tx; sw_sy=ty; sw_down=true; sw_consumed=false; }
             sw_lx = tx; sw_ly = ty;
             // Detectar swipe durante el movimiento (threshold 30px)
@@ -297,6 +318,7 @@ static lv_obj_t *lbl_sistema = nullptr, *lbl_temp_ext, *lbl_weather, *lbl_temp_i
 static lv_obj_t *lbl_wx_forecast = nullptr;
 static lv_obj_t *lbl_wx_icon     = nullptr;
 extern "C" const lv_font_t weather_font;  // src/weather_font.c — iconos MDI del tiempo
+extern "C" const lv_font_t icon_font;     // src/icon_font.c    — icono home-thermometer (calefaccion)
 
 // Historial tile
 static lv_obj_t *btn_hist[3] = {}; // Temperatura, Presencia, Registro
@@ -312,9 +334,11 @@ static lv_obj_t *btn_setpoint=nullptr, *lbl_setpoint=nullptr;
 static lv_obj_t *lbl_arm_state, *btn_arm;
 // Settings
 static lv_obj_t *lbl_settings_ip=nullptr, *lbl_cfg_brightness=nullptr, *lbl_cfg_dim=nullptr;
-static lv_obj_t *lbl_broker_status=nullptr, *lbl_cfg_anim=nullptr;
+static lv_obj_t *lbl_broker_status=nullptr, *lbl_cfg_anim=nullptr, *lbl_cfg_saver=nullptr;
 // Overlays
 static lv_obj_t *scr_alarm=nullptr, *scr_pin=nullptr, *scr_arming=nullptr, *scr_dial=nullptr, *scr_change_pin=nullptr;
+static lv_obj_t *scr_saver=nullptr, *saver_box=nullptr;
+static lv_obj_t *lbl_saver_time=nullptr, *lbl_saver_ext=nullptr, *lbl_saver_int=nullptr, *lbl_saver_heat=nullptr;
 
 // Programa calefacción
 static lv_obj_t           *scr_prog      = nullptr;
@@ -359,12 +383,13 @@ static lv_obj_t *lbl_pin_dots, *lbl_pin_msg;
 static lv_obj_t *lbl_countdown;
 static lv_obj_t *dial_arc=nullptr, *lbl_dial_title_w=nullptr;
 static lv_obj_t *lbl_dial_val=nullptr, *lbl_dial_unit=nullptr;
-static lv_obj_t *dial_box_min=nullptr, *dial_box_bright=nullptr;
+static lv_obj_t *dial_box_min=nullptr, *dial_box_off=nullptr, *dial_box_bright=nullptr;
 
-enum DialMode { DIAL_NONE, DIAL_BRIGHTNESS, DIAL_DIM, DIAL_DIM_BRIGHT, DIAL_SETPOINT };
+enum DialMode { DIAL_NONE, DIAL_BRIGHTNESS, DIAL_DIM, DIAL_OFF, DIAL_DIM_BRIGHT, DIAL_SETPOINT };
 static DialMode dial_mode = DIAL_NONE;
 static int      dial_val  = 0;
 static int      dial_dim_min_tmp    = 0;
+static int      dial_dim_off_tmp    = 10;
 static int      dial_dim_bright_tmp = 5;
 
 // Heat active indicator (home tile, shown/blinking when relay 2 ON)
@@ -372,7 +397,7 @@ static lv_obj_t *lbl_heat_active = nullptr;
 
 // Settings tile buttons (saved for encoder focus navigation)
 static lv_obj_t *btn_settings_br=nullptr, *btn_settings_dim=nullptr;
-static lv_obj_t *btn_settings_pin=nullptr, *btn_settings_anim=nullptr;
+static lv_obj_t *btn_settings_pin=nullptr, *btn_settings_anim=nullptr, *btn_settings_saver=nullptr;
 static lv_obj_t *lbl_settings_mem=nullptr;
 
 // Home-hint labels per tile (saved for encoder focus HOME-nav)
@@ -698,13 +723,15 @@ static lv_obj_t *add_home_hint(lv_obj_t *tile, lv_align_t align, const char *txt
 }
 
 // ── DIAL ─────────────────────────────────────────────────────
+static void dim_box_set(lv_obj_t *b, bool active) {
+    if (!b) return;
+    lv_obj_set_style_bg_color(b, lv_color_hex(active ? COL_CARD : COL_OFF), 0);
+    lv_obj_set_style_border_width(b, active ? 2 : 0, 0);
+}
 static void update_dim_box_highlight() {
-    if (!dial_box_min || !dial_box_bright) return;
-    bool min_active = (dial_mode == DIAL_DIM);
-    lv_obj_set_style_bg_color(dial_box_min,   lv_color_hex(min_active  ? COL_CARD : COL_OFF), 0);
-    lv_obj_set_style_border_width(dial_box_min,   min_active  ? 2 : 0, 0);
-    lv_obj_set_style_bg_color(dial_box_bright, lv_color_hex(!min_active ? COL_CARD : COL_OFF), 0);
-    lv_obj_set_style_border_width(dial_box_bright, !min_active ? 2 : 0, 0);
+    dim_box_set(dial_box_min,    dial_mode == DIAL_DIM);
+    dim_box_set(dial_box_off,    dial_mode == DIAL_OFF);
+    dim_box_set(dial_box_bright, dial_mode == DIAL_DIM_BRIGHT);
 }
 
 static void update_dial_display() {
@@ -715,6 +742,9 @@ static void update_dial_display() {
     } else if (dial_mode == DIAL_DIM) {
         dial_dim_min_tmp = dial_val;
         snprintf(buf, sizeof(buf), dial_val==0 ? "OFF" : "%d", dial_val);
+    } else if (dial_mode == DIAL_OFF) {
+        dial_dim_off_tmp = dial_val;
+        snprintf(buf, sizeof(buf), dial_val==0 ? "OFF" : "%d", dial_val);
     } else if (dial_mode == DIAL_DIM_BRIGHT) {
         dial_dim_bright_tmp = dial_val;
         snprintf(buf, sizeof(buf), "%d%%", dial_val);
@@ -723,14 +753,19 @@ static void update_dial_display() {
     }
     lv_label_set_text(lbl_dial_val, buf);
     if (dial_mode == DIAL_BRIGHTNESS) set_brightness(dial_val);
-    // Keep DIM selector box labels in sync
+    // Mantener las etiquetas de las 3 cajas de PANTALLA sincronizadas
     if (dial_box_min) {
         char b[16];
-        snprintf(b, sizeof(b), dial_dim_min_tmp==0 ? "OFF" : "%d min", dial_dim_min_tmp);
+        snprintf(b, sizeof(b), dial_dim_min_tmp==0 ? "DIM\nOFF" : "DIM\n%d min", dial_dim_min_tmp);
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(dial_box_min, 0), b);
     }
+    if (dial_box_off) {
+        char b[16];
+        snprintf(b, sizeof(b), dial_dim_off_tmp==0 ? "Apagar\nOFF" : "Apagar\n%d min", dial_dim_off_tmp);
+        lv_label_set_text((lv_obj_t*)lv_obj_get_child(dial_box_off, 0), b);
+    }
     if (dial_box_bright) {
-        char b[16]; snprintf(b, sizeof(b), "%d%%", dial_dim_bright_tmp);
+        char b[16]; snprintf(b, sizeof(b), "Brillo\n%d%%", dial_dim_bright_tmp);
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(dial_box_bright, 0), b);
     }
 }
@@ -739,6 +774,17 @@ static void update_setpoint_btn() {
     if (!lbl_setpoint) return;
     char buf[10]; snprintf(buf, sizeof(buf), "%d\xc2\xb0""C", heat_setpoint);
     lv_label_set_text(lbl_setpoint, buf);
+}
+
+static void update_screen_pill_label() {
+    if (!lbl_cfg_dim) return;
+    char d[12], o[12], b[48];
+    if (cfg_dim_delay==0) snprintf(d,sizeof(d),"DIM -");
+    else                  snprintf(d,sizeof(d),"DIM %dm", cfg_dim_delay);
+    if (cfg_off_delay==0) snprintf(o,sizeof(o),"Apg -");
+    else                  snprintf(o,sizeof(o),"Apg %dm", cfg_off_delay);
+    snprintf(b,sizeof(b),"%s  %s  %d%%", d, o, cfg_dim_brightness);
+    lv_label_set_text(lbl_cfg_dim, b);
 }
 
 static void apply_dial() {
@@ -751,24 +797,24 @@ static void apply_dial() {
             char b[24]; snprintf(b,sizeof(b),"Brillo: %d", cfg_brightness);
             lv_label_set_text(lbl_cfg_brightness, b);
         }
-    } else if (dial_mode == DIAL_DIM || dial_mode == DIAL_DIM_BRIGHT) {
-        // Sync current arc value to the right tmp var, then save both
-        if (dial_mode == DIAL_DIM)       dial_dim_min_tmp    = dial_val;
-        else                             dial_dim_bright_tmp = dial_val;
+    } else if (dial_mode == DIAL_DIM || dial_mode == DIAL_OFF || dial_mode == DIAL_DIM_BRIGHT) {
+        // Sincronizar el valor actual del arco a su tmp y guardar los 3
+        if      (dial_mode == DIAL_DIM)        dial_dim_min_tmp    = dial_val;
+        else if (dial_mode == DIAL_OFF)        dial_dim_off_tmp    = dial_val;
+        else                                   dial_dim_bright_tmp = dial_val;
+        // Apagar debe ser >= DIM (si no, lo igualamos al DIM)
+        if (dial_dim_off_tmp != 0 && dial_dim_min_tmp != 0 && dial_dim_off_tmp < dial_dim_min_tmp)
+            dial_dim_off_tmp = dial_dim_min_tmp;
         cfg_dim_delay      = dial_dim_min_tmp;
+        cfg_off_delay      = dial_dim_off_tmp;
         cfg_dim_brightness = dial_dim_bright_tmp;
         prefs.putInt("dim_delay",  cfg_dim_delay);
+        prefs.putInt("off_delay",  cfg_off_delay);
         prefs.putInt("dim_bright", cfg_dim_brightness);
-        if (lbl_cfg_dim) {
-            char b[32];
-            if (cfg_dim_delay == 0)
-                snprintf(b, sizeof(b), "DIM  OFF  %d%%", cfg_dim_brightness);
-            else
-                snprintf(b, sizeof(b), "DIM  %d min  %d%%", cfg_dim_delay, cfg_dim_brightness);
-            lv_label_set_text(lbl_cfg_dim, b);
-        }
-        // Hide selector boxes on exit
-        if (dial_box_min)   lv_obj_add_flag(dial_box_min,   LV_OBJ_FLAG_HIDDEN);
+        update_screen_pill_label();
+        // Ocultar cajas selectoras al salir
+        if (dial_box_min)    lv_obj_add_flag(dial_box_min,    LV_OBJ_FLAG_HIDDEN);
+        if (dial_box_off)    lv_obj_add_flag(dial_box_off,    LV_OBJ_FLAG_HIDDEN);
         if (dial_box_bright) lv_obj_add_flag(dial_box_bright, LV_OBJ_FLAG_HIDDEN);
     } else if (dial_mode == DIAL_SETPOINT) {
         heat_setpoint = dial_val;
@@ -784,27 +830,45 @@ static void cb_dial_arc_changed(lv_event_t *e) {
     update_dial_display();
 }
 static void cb_dial_ok(lv_event_t *e)     { apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV); }
+static void dim_boxes_hide() {
+    if (dial_box_min)    lv_obj_add_flag(dial_box_min,    LV_OBJ_FLAG_HIDDEN);
+    if (dial_box_off)    lv_obj_add_flag(dial_box_off,    LV_OBJ_FLAG_HIDDEN);
+    if (dial_box_bright) lv_obj_add_flag(dial_box_bright, LV_OBJ_FLAG_HIDDEN);
+}
 static void cb_dial_cancel(lv_event_t *e) {
     if (dial_mode==DIAL_BRIGHTNESS) set_brightness(cfg_brightness);
-    if (dial_mode==DIAL_DIM || dial_mode==DIAL_DIM_BRIGHT) {
-        if (dial_box_min)   lv_obj_add_flag(dial_box_min,   LV_OBJ_FLAG_HIDDEN);
-        if (dial_box_bright) lv_obj_add_flag(dial_box_bright, LV_OBJ_FLAG_HIDDEN);
-    }
+    if (dial_mode==DIAL_DIM || dial_mode==DIAL_OFF || dial_mode==DIAL_DIM_BRIGHT) dim_boxes_hide();
     dial_mode=DIAL_NONE; go_to(SCR_TV);
 }
 
+// Antes de cambiar de caja, guarda el valor del arco en su tmp correspondiente
+static void dim_sync_current() {
+    if      (dial_mode == DIAL_DIM)        dial_dim_min_tmp    = dial_val;
+    else if (dial_mode == DIAL_OFF)        dial_dim_off_tmp    = dial_val;
+    else if (dial_mode == DIAL_DIM_BRIGHT) dial_dim_bright_tmp = dial_val;
+}
 static void cb_dim_box_min(lv_event_t *e) {
-    if (dial_mode == DIAL_DIM_BRIGHT) dial_dim_bright_tmp = dial_val;
+    dim_sync_current();
     dial_mode = DIAL_DIM;
     dial_val  = dial_dim_min_tmp;
     lv_arc_set_range(dial_arc, 0, 30);
     lv_arc_set_value(dial_arc, dial_val);
-    lv_label_set_text(lbl_dial_unit, "minutos (0=nunca)");
+    lv_label_set_text(lbl_dial_unit, "DIM: minutos (0=nunca)");
+    update_dial_display();
+    update_dim_box_highlight();
+}
+static void cb_dim_box_off(lv_event_t *e) {
+    dim_sync_current();
+    dial_mode = DIAL_OFF;
+    dial_val  = dial_dim_off_tmp;
+    lv_arc_set_range(dial_arc, 0, 60);
+    lv_arc_set_value(dial_arc, dial_val);
+    lv_label_set_text(lbl_dial_unit, "Apagar: minutos (0=nunca)");
     update_dial_display();
     update_dim_box_highlight();
 }
 static void cb_dim_box_bright(lv_event_t *e) {
-    if (dial_mode == DIAL_DIM) dial_dim_min_tmp = dial_val;
+    dim_sync_current();
     dial_mode = DIAL_DIM_BRIGHT;
     dial_val  = dial_dim_bright_tmp;
     lv_arc_set_range(dial_arc, 1, 100);
@@ -816,9 +880,7 @@ static void cb_dim_box_bright(lv_event_t *e) {
 
 static void open_dial(DialMode mode) {
     dial_mode = mode;
-    // Hide DIM selector boxes for non-DIM modes
-    if (dial_box_min)   lv_obj_add_flag(dial_box_min,   LV_OBJ_FLAG_HIDDEN);
-    if (dial_box_bright) lv_obj_add_flag(dial_box_bright, LV_OBJ_FLAG_HIDDEN);
+    dim_boxes_hide();  // ocultas salvo en modos PANTALLA
     if (mode == DIAL_BRIGHTNESS) {
         dial_val=cfg_brightness;
         lv_label_set_text(lbl_dial_title_w, "BRILLO");
@@ -826,12 +888,14 @@ static void open_dial(DialMode mode) {
         lv_arc_set_range(dial_arc, 10, 255);
     } else if (mode == DIAL_DIM) {
         dial_dim_min_tmp    = cfg_dim_delay;
+        dial_dim_off_tmp    = cfg_off_delay;
         dial_dim_bright_tmp = cfg_dim_brightness;
         dial_val = cfg_dim_delay;
-        lv_label_set_text(lbl_dial_title_w, "APAGADO AUTO");
-        lv_label_set_text(lbl_dial_unit, "minutos (0=nunca)");
+        lv_label_set_text(lbl_dial_title_w, "PANTALLA");
+        lv_label_set_text(lbl_dial_unit, "DIM: minutos (0=nunca)");
         lv_arc_set_range(dial_arc, 0, 30);
-        if (dial_box_min)   lv_obj_clear_flag(dial_box_min,   LV_OBJ_FLAG_HIDDEN);
+        if (dial_box_min)    lv_obj_clear_flag(dial_box_min,    LV_OBJ_FLAG_HIDDEN);
+        if (dial_box_off)    lv_obj_clear_flag(dial_box_off,    LV_OBJ_FLAG_HIDDEN);
         if (dial_box_bright) lv_obj_clear_flag(dial_box_bright, LV_OBJ_FLAG_HIDDEN);
         update_dim_box_highlight();
     } else {
@@ -1983,6 +2047,17 @@ static void cb_cycle_anim(lv_event_t *e) {
     if(lbl_cfg_anim)
         lv_label_set_text(lbl_cfg_anim, cfg_anim==0 ? "Anim: Ninguna" : "Anim: Deslizar");
 }
+static const char* saver_mode_text() {
+    return cfg_saver_mode==0 ? "Salvapant: Off"
+         : cfg_saver_mode==1 ? "Salvapant: On"
+                             : "Salvapant: Calef";
+}
+static void cb_cycle_saver(lv_event_t *e) {
+    if(swipe_blocked()) return;
+    cfg_saver_mode = (cfg_saver_mode + 1) % 3;
+    prefs.begin("domus",false); prefs.putInt("saver_mode", cfg_saver_mode); prefs.end();
+    if(lbl_cfg_saver) lv_label_set_text(lbl_cfg_saver, saver_mode_text());
+}
 static void build_tile_settings() {
     bg(tile_settings);
     centered_label(tile_settings,"AJUSTES",&lv_font_montserrat_20,COL_TEXT,-170);
@@ -1990,8 +2065,8 @@ static void build_tile_settings() {
     centered_label(tile_settings,FW_VERSION,&lv_font_montserrat_14,COL_MUTED,-128);
     lbl_broker_status=centered_label(tile_settings,"Broker: sin conexion",&lv_font_montserrat_14,COL_ALERT,-108);
 
-    // 5 píldoras iguales: 260×46px, gap=8px → total 270px centrado
-    btn_settings_br=make_big_btn(tile_settings,"",COL_RELAY_DIM,-70,260,46,cb_open_brightness,nullptr);
+    // 5 píldoras iguales: 260×46px, gap=8px
+    btn_settings_br=make_big_btn(tile_settings,"",COL_RELAY_DIM,-78,260,46,cb_open_brightness,nullptr);
     lv_obj_t *btn_br=btn_settings_br;
     lbl_cfg_brightness=lv_label_create(btn_br);
     char b1[24]; snprintf(b1,sizeof(b1),"Brillo: %d",cfg_brightness);
@@ -2000,20 +2075,24 @@ static void build_tile_settings() {
     lv_obj_set_style_text_color(lbl_cfg_brightness,lv_color_hex(COL_TEXT),0);
     lv_obj_center(lbl_cfg_brightness);
 
-    btn_settings_dim=make_big_btn(tile_settings,"",COL_RELAY_DIM,-16,260,46,cb_open_dim,nullptr);
+    btn_settings_dim=make_big_btn(tile_settings,"",COL_RELAY_DIM,-24,260,46,cb_open_dim,nullptr);
     lv_obj_t *btn_dim=btn_settings_dim;
     lbl_cfg_dim=lv_label_create(btn_dim);
-    char b2[32];
-    if (cfg_dim_delay==0) snprintf(b2,sizeof(b2),"DIM  OFF  %d%%",cfg_dim_brightness);
-    else                  snprintf(b2,sizeof(b2),"DIM  %d min  %d%%",cfg_dim_delay,cfg_dim_brightness);
-    lv_label_set_text(lbl_cfg_dim,b2);
     lv_obj_set_style_text_font(lbl_cfg_dim,&lv_font_montserrat_20,0);
     lv_obj_set_style_text_color(lbl_cfg_dim,lv_color_hex(COL_TEXT),0);
+    update_screen_pill_label();
     lv_obj_center(lbl_cfg_dim);
 
-    btn_settings_pin=make_big_btn(tile_settings,"Cambiar PIN",COL_RELAY_DIM,+38,260,46,cb_open_change_pin,nullptr);
+    btn_settings_saver=make_big_btn(tile_settings,"",COL_RELAY_DIM,+30,260,46,cb_cycle_saver,nullptr);
+    lbl_cfg_saver=lv_label_create(btn_settings_saver);
+    lv_label_set_text(lbl_cfg_saver, saver_mode_text());
+    lv_obj_set_style_text_font(lbl_cfg_saver,&lv_font_montserrat_20,0);
+    lv_obj_set_style_text_color(lbl_cfg_saver,lv_color_hex(COL_TEXT),0);
+    lv_obj_center(lbl_cfg_saver);
 
-    btn_settings_anim=make_big_btn(tile_settings,"",COL_RELAY_DIM,+92,260,46,cb_cycle_anim,nullptr);
+    btn_settings_pin=make_big_btn(tile_settings,"Cambiar PIN",COL_RELAY_DIM,+84,260,46,cb_open_change_pin,nullptr);
+
+    btn_settings_anim=make_big_btn(tile_settings,"",COL_RELAY_DIM,+138,260,46,cb_cycle_anim,nullptr);
     lv_obj_t *btn_an=btn_settings_anim;
     lbl_cfg_anim=lv_label_create(btn_an);
     lv_label_set_text(lbl_cfg_anim,"Anim: Ninguna");
@@ -2036,6 +2115,106 @@ static void build_scr_alarm() {
     lbl_alarm_type  =centered_label(scr_alarm,"! ALARMA !",&lv_font_montserrat_40,COL_ALERT,-80);
     lbl_alarm_detail=centered_label(scr_alarm,"",&lv_font_montserrat_20,COL_TEXT,-20);
     btn_deactivate  =make_big_btn(scr_alarm,"DESACTIVAR",COL_ALERT,70,260,80,cb_deactivate,nullptr);
+}
+
+// ── SALVAPANTALLAS (anti-ghost) ───────────────────────────────
+// Pantalla negra con hora + temp ext/int + icono de calefaccion (rojo, solo si
+// hay un modo de calefaccion activo). El bloque salta a posiciones aleatorias
+// para que ningun pixel quede fijo. Brillo bajo (el del DIM).
+#define SAVER_W 200
+#define SAVER_H 170
+static void build_scr_saver() {
+    scr_saver = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr_saver, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(scr_saver, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(scr_saver, LV_OBJ_FLAG_SCROLLABLE);
+
+    saver_box = lv_obj_create(scr_saver);
+    lv_obj_set_size(saver_box, SAVER_W, SAVER_H);
+    lv_obj_set_style_bg_opa(saver_box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(saver_box, 0, 0);
+    lv_obj_set_style_pad_all(saver_box, 0, 0);
+    lv_obj_clear_flag(saver_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(saver_box, LV_OBJ_FLAG_CLICKABLE);
+
+    lbl_saver_time = lv_label_create(saver_box);
+    lv_label_set_text(lbl_saver_time, "--:--");
+    lv_obj_set_style_text_font(lbl_saver_time, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(lbl_saver_time, lv_color_hex(COL_TEXT), 0);
+    lv_obj_align(lbl_saver_time, LV_ALIGN_TOP_MID, 0, 0);
+
+    lbl_saver_ext = lv_label_create(saver_box);
+    lv_label_set_text(lbl_saver_ext, "Ext --");
+    lv_obj_set_style_text_font(lbl_saver_ext, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_saver_ext, lv_color_hex(COL_MUTED), 0);
+    lv_obj_align(lbl_saver_ext, LV_ALIGN_TOP_MID, 0, 62);
+
+    lbl_saver_int = lv_label_create(saver_box);
+    lv_label_set_text(lbl_saver_int, "Int --");
+    lv_obj_set_style_text_font(lbl_saver_int, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(lbl_saver_int, lv_color_hex(COL_MUTED), 0);
+    lv_obj_align(lbl_saver_int, LV_ALIGN_TOP_MID, 0, 92);
+
+    lbl_saver_heat = lv_label_create(saver_box);
+    lv_label_set_text(lbl_saver_heat, "\xF3\xB0\xBD\x94");  // mdi home-thermometer (U+F0F54)
+    lv_obj_set_style_text_font(lbl_saver_heat, &icon_font, 0);
+    lv_obj_set_style_text_color(lbl_saver_heat, lv_color_hex(COL_ALERT), 0);  // rojo
+    lv_obj_align(lbl_saver_heat, LV_ALIGN_TOP_MID, 0, 122);
+    lv_obj_add_flag(lbl_saver_heat, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void saver_reposition() {
+    if (!saver_box) return;
+    int cx, cy;  // centro del bloque en circulo r<=104 → cabe entero (pantalla redonda)
+    do { cx = random(136, 345); cy = random(136, 345); }
+    while ((cx-240)*(cx-240) + (cy-240)*(cy-240) > 104*104);
+    lv_obj_align(saver_box, LV_ALIGN_TOP_LEFT, cx - SAVER_W/2, cy - SAVER_H/2);
+}
+static void saver_update_content() {
+    time_t now = time(NULL);
+    if (now > 1000000000L) {
+        struct tm *t = localtime(&now);
+        char b[8]; snprintf(b, sizeof(b), "%02d:%02d", t->tm_hour, t->tm_min);
+        lv_label_set_text(lbl_saver_time, b);
+    }
+    char e[20];
+    if (wx.ok && !isnan(wx.temp)) snprintf(e, sizeof(e), "Ext %.1f\xc2\xb0", wx.temp);
+    else                          snprintf(e, sizeof(e), "Ext --");
+    lv_label_set_text(lbl_saver_ext, e);
+    char in[20];
+    if (!isnan(tuya_temp_int)) snprintf(in, sizeof(in), "Int %.1f\xc2\xb0", tuya_temp_int);
+    else                       snprintf(in, sizeof(in), "Int --");
+    lv_label_set_text(lbl_saver_int, in);
+    if (lbl_saver_heat) {
+        if (heat_mode != HM_OFF) lv_obj_clear_flag(lbl_saver_heat, LV_OBJ_FLAG_HIDDEN);
+        else                     lv_obj_add_flag(lbl_saver_heat, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+static void enter_saver() {
+    scr_before_saver = lv_scr_act();
+    saver_update_content();
+    saver_reposition();
+    apply_dim_brightness();
+    lv_scr_load(scr_saver);
+    saver_active = true;
+}
+static void enter_dim() {
+    apply_dim_brightness();
+    screen_dimmed = true; screen_off = false;
+}
+static void enter_off() {
+    screen_dimmed = true; screen_off = true;
+    bool heating = (heat_mode != HM_OFF);
+    bool show_saver = (cfg_saver_mode == 1) || (cfg_saver_mode == 2 && heating);
+    if (show_saver) enter_saver();
+    else { saver_active = false; set_brightness(0); }
+}
+// Despertar por un evento de sensor/actuador: solo si la pantalla esta
+// apagada/atenuada y NO estamos atendiendo una alarma (no pisar esa pantalla).
+static void wake_on_event() {
+    if (critical_alert || intruder_active) return;
+    if (cur_scr == SCR_ALARM_CRIT || cur_scr == SCR_PIN) return;
+    if (screen_dimmed) request_wake(true);
 }
 
 // ── BUILD OVERLAY PIN ─────────────────────────────────────────
@@ -2130,11 +2309,11 @@ static void build_scr_dial() {
     lv_obj_align(lbl_dial_val,LV_ALIGN_CENTER,0,-20);
     lbl_dial_unit=centered_label(scr_dial,"intensidad",&lv_font_montserrat_14,COL_MUTED,30);
 
-    // DIM selector boxes — shown only when opening DIM mode
+    // Cajas selectoras de PANTALLA — visibles solo en modo DIM/Apagar/Brillo
     auto make_dim_box=[&](int x_ofs, const char *txt, lv_event_cb_t cb) -> lv_obj_t* {
         lv_obj_t *b=lv_obj_create(scr_dial);
-        lv_obj_set_size(b,115,44);
-        lv_obj_align(b,LV_ALIGN_CENTER,x_ofs,+70);
+        lv_obj_set_size(b,112,48);
+        lv_obj_align(b,LV_ALIGN_CENTER,x_ofs,+72);
         lv_obj_set_style_bg_color(b,lv_color_hex(COL_OFF),0);
         lv_obj_set_style_radius(b,10,0);
         lv_obj_set_style_border_color(b,lv_color_hex(COL_RELAY_ON),0);
@@ -2148,11 +2327,13 @@ static void build_scr_dial() {
         lv_label_set_text(l,txt);
         lv_obj_set_style_text_font(l,&lv_font_montserrat_14,0);
         lv_obj_set_style_text_color(l,lv_color_hex(COL_TEXT),0);
+        lv_obj_set_style_text_align(l,LV_TEXT_ALIGN_CENTER,0);
         lv_obj_center(l);
         return b;
     };
-    dial_box_min   = make_dim_box(-62, "5 min",  cb_dim_box_min);
-    dial_box_bright= make_dim_box(+62, "5%",     cb_dim_box_bright);
+    dial_box_min   = make_dim_box(-122, "DIM\n5 min",  cb_dim_box_min);
+    dial_box_off   = make_dim_box(   0, "Apagar\n10 min", cb_dim_box_off);
+    dial_box_bright= make_dim_box(+122, "Brillo\n5%",     cb_dim_box_bright);
 
     make_big_btn(scr_dial,"OK",      COL_OK, 120,200,56,cb_dial_ok,    nullptr);
     make_big_btn(scr_dial,"CANCELAR",COL_OFF,185,200,44,cb_dial_cancel,nullptr);
@@ -2204,10 +2385,10 @@ static void build_focus_lists(){
       f.items[3]=btn_setpoint; f.items[4]=btn_hm[2];  f.items[5]=btn_sirena_r;
       f.items[6]=hint_relays;  f.home_nav[6]=true; }
     // 2 = settings tile
-    { FocusList &f=tile_focus[2]; f.count=5;
-      f.items[0]=btn_settings_br; f.items[1]=btn_settings_dim;
-      f.items[2]=btn_settings_pin; f.items[3]=btn_settings_anim;
-      f.items[4]=hint_settings; f.home_nav[4]=true; }
+    { FocusList &f=tile_focus[2]; f.count=6;
+      f.items[0]=btn_settings_br;    f.items[1]=btn_settings_dim;
+      f.items[2]=btn_settings_saver; f.items[3]=btn_settings_pin;
+      f.items[4]=btn_settings_anim;  f.items[5]=hint_settings; f.home_nav[5]=true; }
     // 3 = hist tile
     { FocusList &f=tile_focus[3]; f.count=4;
       f.items[0]=btn_hist[0];  f.home_nav[0]=false;
@@ -2348,7 +2529,7 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_detail,flood?"Valvulas cerradas auto.":"Sirena activada");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"DESACTIVAR");
         mqtt_publish_status();
-        set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
+        request_wake(false);
         go_to(SCR_ALARM_CRIT);
     }
     if(alarm_state==AS_ARMED&&!a6v3.input[4]&&!intruder_active){
@@ -2358,13 +2539,14 @@ static void check_alarms() {
         lv_label_set_text(lbl_alarm_detail,"Introduce PIN para desarmar");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"INTRODUCIR PIN");
         mqtt_publish_status();
-        set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
+        request_wake(false);
         go_to(SCR_ALARM_CRIT);
     }
 }
 
 // ── SCREEN SWITCH ─────────────────────────────────────────────
 static void do_switch(Screen s) {
+    wake_reload_pending = false;  // un cambio explicito de pantalla anula la recarga del salvapantallas
     switch(s){
         case SCR_TV:
             update_home();
@@ -2382,7 +2564,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_TV;
             return;
         case SCR_ALARM_CRIT:
-            set_brightness(cfg_brightness); screen_dimmed=false; last_touch_ms=millis();
+            request_wake(false);
             lv_scr_load_anim(scr_alarm,LV_SCR_LOAD_ANIM_MOVE_TOP,250,0,false);
             cur_scr=SCR_ALARM_CRIT; return;
         case SCR_PIN:
@@ -2617,6 +2799,7 @@ static void exec_focus_item() {
     else if(w==btn_sirena_r)      cb_sirena(nullptr);
     else if(w==btn_settings_br)   cb_open_brightness(nullptr);
     else if(w==btn_settings_dim)  cb_open_dim(nullptr);
+    else if(w==btn_settings_saver)cb_cycle_saver(nullptr);
     else if(w==btn_settings_pin)  cb_open_change_pin(nullptr);
     else if(w==btn_settings_anim) cb_cycle_anim(nullptr);
     else if(w==btn_hist[0])       cb_hist_temp(nullptr);
@@ -2638,8 +2821,10 @@ void setup() {
 
     prefs.begin("domus",true);
     cfg_brightness    =(int)prefs.getInt("brightness", 200);
-    cfg_dim_delay     =(int)prefs.getInt("dim_delay",  5);
+    cfg_dim_delay     =(int)prefs.getInt("dim_delay",  2);
+    cfg_off_delay     =(int)prefs.getInt("off_delay",  10);
     cfg_dim_brightness=(int)prefs.getInt("dim_bright", 5);
+    cfg_saver_mode    =(uint8_t)prefs.getInt("saver_mode", 2);
     heat_setpoint     =(int)prefs.getInt("heat_sp",    20);
     heat_mode         =(HeatMode)prefs.getInt("heat_mode",0);
     prefs.getString("pin","1234").toCharArray(cfg_pin,sizeof(cfg_pin));
@@ -2711,6 +2896,7 @@ void setup() {
     build_tile_settings();
     build_focus_lists();
     build_scr_alarm();
+    build_scr_saver();
     build_scr_pin();
     build_scr_change_pin();
     build_scr_arming();
@@ -2773,6 +2959,12 @@ static bool heat_blink_state=false;
 void loop() {
     ArduinoOTA.handle();
     broker.update();
+
+    // Salir del salvapantallas: recargar la pantalla previa (fuera de callbacks de input)
+    if (wake_reload_pending) {
+        wake_reload_pending = false;
+        lv_scr_load(scr_before_saver ? scr_before_saver : tv);
+    }
 
     // Procesar swipe detectado en touch_read_cb (fuera de ISR/callback)
     if (sw_dc != 0 || sw_dr != 0) {
@@ -2837,7 +3029,7 @@ void loop() {
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
             last_touch_ms=millis();
-            if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
+            if(screen_dimmed) request_wake(true);
             // ── Focus mode: move between items ────────────────
             if(enc_mode==ENC_FOCUS){
                 enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
@@ -2876,7 +3068,7 @@ void loop() {
                 if(bit5==0 && pcf_btn_prev==1 && millis()-enc_btn_last_ms>200){
                     enc_btn_last_ms=millis();
                     last_touch_ms=millis();
-                    if(screen_dimmed){ set_brightness(cfg_brightness); screen_dimmed=false; }
+                    if(screen_dimmed) request_wake(true);
                     if(dial_mode!=DIAL_NONE){
                         apply_dial(); dial_mode=DIAL_NONE; go_to(SCR_TV);
                     } else if(cur_scr==SCR_PIN||cur_scr==SCR_CHANGE_PIN){
@@ -2901,9 +3093,31 @@ void loop() {
     }
     // ─────────────────────────────────────────────────────────────
 
-    if(cfg_dim_delay>0&&!screen_dimmed&&alarm_state<AS_GRACE)  // no atenuar con alarma activa (GRACE/SOUNDING)
-        if(millis()-last_touch_ms>(unsigned long)cfg_dim_delay*60000UL){
-            set_brightness(cfg_dim_brightness); screen_dimmed=true; }
+    // ── Reposo de pantalla: ACTIVA → DIM → APAGADO/salvapantallas ─
+    // (no atenuar/apagar con alarma activa: GRACE/SOUNDING)
+    if(alarm_state<AS_GRACE){
+        unsigned long idle = millis()-last_touch_ms;
+        // 1) DIM
+        if(!screen_dimmed && cfg_dim_delay>0 && idle>(unsigned long)cfg_dim_delay*60000UL)
+            enter_dim();
+        // 2) APAGADO / salvapantallas
+        if(!screen_off && cfg_off_delay>0 && idle>(unsigned long)cfg_off_delay*60000UL)
+            enter_off();
+        // 3) Tick del salvapantallas: recolocar + refrescar cada 10s; si modo
+        //    "solo calefaccion" y ya no hay calefaccion, apagar del todo.
+        if(saver_active){
+            static unsigned long saver_tick=0;
+            if(millis()-saver_tick>=10000UL){
+                saver_tick=millis();
+                if(cfg_saver_mode==2 && heat_mode==HM_OFF){
+                    saver_active=false; lv_scr_load(scr_before_saver?scr_before_saver:tv);
+                    set_brightness(0);
+                } else {
+                    saver_update_content(); saver_reposition();
+                }
+            }
+        }
+    }
 
     if(alarm_state==AS_ARMING){
         unsigned long now=millis();
@@ -2992,6 +3206,7 @@ void loop() {
         }
         if(a6v3.output[2]!=hp_output[2]){
             log_event(EVT_RELAY_CALEF, a6v3.output[2]?1:0, (uint8_t)heat_mode);
+            if(a6v3.output[2]) wake_on_event();   // calefaccion al arrancar enciende pantalla
             hp_output[2]=a6v3.output[2];
         }
         if(a6v3.output[3]!=hp_output[3]){
@@ -3008,13 +3223,22 @@ void loop() {
         // Inundación (input[1]: true = activo)
         if(a6v3.input[1]!=hp_input[1]){
             log_event(EVT_FLOOD, a6v3.input[1]?1:0);
+            wake_on_event();
             hp_input[1]=a6v3.input[1];
         }
         // Humo (input[5] invertido: false = humo)
         if(a6v3.input[5]!=hp_input[5]){
             log_event(EVT_SMOKE, !a6v3.input[5]?1:0);
+            wake_on_event();
             hp_input[5]=a6v3.input[5];
         }
+        // 220V (input[6]): cambio enciende pantalla (sin log; el debounce esta en HA)
+        if(a6v3.input[6]!=hp_input[6]){
+            wake_on_event();
+            hp_input[6]=a6v3.input[6];
+        }
+        // Nota: presencia/PIR (input[4], "el hall") NO enciende la pantalla por
+        // si misma; solo lo hace via check_alarms cuando dispara la intrusion.
         // ─────────────────────────────────────────────────────
 
         ui_needs_update=false;
