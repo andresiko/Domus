@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.27"
+#define FW_VERSION "v2.28"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -473,21 +473,13 @@ static const uint32_t MAX_EVT  = 131072UL; // ~1.8 años a 200 evt/día → ~1 M
 static uint32_t hist_th = 0; // write head temp
 static uint32_t hist_eh = 0; // write head events
 
-static uint8_t       heatmap[7][96] = {}; // presencia: conteo por franja 15min × día semana
-static unsigned long hm_save_ts     = 0;
+static uint8_t       heatmap[7][96] = {}; // buffer de pintado: presencia (15min × día) de la semana mostrada; se rellena desde /evt.bin en heatmap_load_week()
 static int8_t        hm_week_off    = 0;  // 0=semana actual, -1=anterior, etc.
 static lv_obj_t     *lbl_hm_week    = nullptr;
 
 // Estado previo para detección de cambios y logging
 static bool hp_input[7]  = {};
 static bool hp_output[7] = {};
-
-static void hm_save() {
-    File f = LittleFS.open("/heatmap.bin", "w");
-    if (!f) return;
-    f.write((uint8_t*)heatmap, sizeof(heatmap));
-    f.close();
-}
 
 // ── Buffer de eventos en RAM ──────────────────────────────────
 // Escribir en flash bloquea el bus PSRAM/flash compartido y produce un glitch
@@ -563,14 +555,46 @@ static void log_temp(float ti, float te) {
     p.putUInt("th", hist_th); p.end();
 }
 
-static void hm_presence(bool on) {
-    if (!on) return;
+// Reconstruye el mapa de presencia de la semana indicada (0=actual, -1=anterior…)
+// a partir del registro real /evt.bin: cada EVT_PRESENCE con value==1 (alguien
+// entra) suma 1 a su franja de 15 min. Así "< Sem"/"Sem >" muestran la semana
+// real, hacia atrás mientras haya datos (no una suma acumulada por día-semana).
+static void heatmap_load_week(int week_off) {
+    memset(heatmap, 0, sizeof(heatmap));
+    flush_events();                 // volcar lo pendiente en RAM para incluir lo reciente
     time_t now = time(NULL);
-    if (now < 1000000000L) return;
+    if (now < 1000000000L) return;  // sin hora NTP no podemos ubicar la semana
+
+    // Lunes 00:00 de la semana seleccionada y fin exclusivo (lunes siguiente)
     struct tm t; localtime_r(&now, &t);
-    int d = t.tm_wday;
-    int s = (t.tm_hour * 60 + t.tm_min) / 15; // 0-95
-    if (heatmap[d][s] < 255) heatmap[d][s]++;
+    t.tm_hour = 0; t.tm_min = 0; t.tm_sec = 0;
+    int wd = t.tm_wday == 0 ? 6 : t.tm_wday - 1;   // Lun=0..Dom=6
+    time_t week_start = mktime(&t) - (time_t)wd*86400L + (time_t)week_off*7L*86400L;
+    time_t week_end   = week_start + 7L*86400L;
+
+    File f = LittleFS.open("/evt.bin", "r");
+    if (!f) return;
+    uint32_t total = f.size() / sizeof(EvtRec);
+    if (total == 0) { f.close(); return; }
+    uint32_t count = total < MAX_EVT ? total : MAX_EVT;
+    uint32_t head  = hist_eh;
+    for (uint32_t i = 0; i < count; i++) {
+        if ((i & 0x3F) == 0) esp_task_wdt_reset();
+        uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
+        EvtRec r;
+        f.seek(idx * sizeof(EvtRec));
+        if (f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
+        if (r.ts < 1000000000UL) continue;
+        time_t ts = (time_t)r.ts;
+        if (ts >= week_end) continue;   // más reciente que la ventana → sigue retrocediendo
+        if (ts <  week_start) break;    // ya pasamos la ventana (más antiguo) → fin
+        if ((EvtType)r.type != EVT_PRESENCE || r.value != 1) continue;
+        struct tm tt; localtime_r(&ts, &tt);
+        int d = tt.tm_wday;                       // 0=Dom..6=Sab (índice de heatmap)
+        int s = (tt.tm_hour*60 + tt.tm_min) / 15; // 0-95
+        if (d >= 0 && d < 7 && s >= 0 && s < 96 && heatmap[d][s] < 255) heatmap[d][s]++;
+    }
+    f.close();
 }
 
 static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux);
@@ -583,15 +607,8 @@ static void hist_init() {
     hist_th = p.getUInt("th", 0);
     hist_eh = p.getUInt("eh", 0);
     p.end();
-    if (LittleFS.exists("/heatmap.bin")) {
-        File f = LittleFS.open("/heatmap.bin", "r");
-        if (f && f.size() == sizeof(heatmap))
-            f.read((uint8_t*)heatmap, sizeof(heatmap));
-        if (f) f.close();
-    } else {
-        File f = LittleFS.open("/heatmap.bin", "w");
-        if (f) { f.write((uint8_t*)heatmap, sizeof(heatmap)); f.close(); }
-    }
+    // El mapa de presencia se reconstruye desde /evt.bin al abrir la pantalla
+    // (heatmap_load_week), no se persiste por separado.
     Serial.printf("[HIST] init  th=%lu  eh=%lu\n", hist_th, hist_eh);
 }
 
@@ -1606,17 +1623,15 @@ static void hm_update_week_label() {
         m.tm_mday,m.tm_mon+1, s.tm_mday,s.tm_mon+1,s.tm_year+1900);
     lv_label_set_text(lbl_hm_week, buf);
 }
-static void cb_hm_week_prev(lv_event_t *e) {
-    hm_week_off--;
+static void heatmap_goto_week(int off) {
+    if(off > 0) off = 0;                 // no hay futuro
+    hm_week_off = (int8_t)off;
+    heatmap_load_week(hm_week_off);      // reconstruye desde /evt.bin
     hm_update_week_label();
     if(hm_view) lv_obj_invalidate(hm_view);
 }
-static void cb_hm_week_next(lv_event_t *e) {
-    if(hm_week_off >= 0) return;
-    hm_week_off++;
-    hm_update_week_label();
-    if(hm_view) lv_obj_invalidate(hm_view);
-}
+static void cb_hm_week_prev(lv_event_t *e) { heatmap_goto_week(hm_week_off - 1); }
+static void cb_hm_week_next(lv_event_t *e) { heatmap_goto_week(hm_week_off + 1); }
 static void cb_heatmap_exit(lv_event_t *e) { go_to(SCR_TV); }
 
 // Col c → wday (c+1)%7   [c=0→Mon=1 … c=6→Sun=0]
@@ -1630,8 +1645,7 @@ static void hm_draw_event(lv_event_t *e) {
     int32_t cw = (area.x2 - area.x1) / 7;
     int32_t ch = (area.y2 - area.y1) / 24;
     uint8_t maxv = 1;
-    if(hm_week_off==0)
-        for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
+    for(int d=0;d<7;d++) for(int s=0;s<96;s++) if(heatmap[d][s]>maxv) maxv=heatmap[d][s];
     lv_color_t c_lo = lv_color_hex(0x151515);
     lv_color_t c_hi = lv_color_hex(0x0050FF);  // swap→0xFF5000 naranja-rojo (mas contraste)
     lv_draw_rect_dsc_t dsc;
@@ -1642,7 +1656,7 @@ static void hm_draw_event(lv_event_t *e) {
         for(int c=0; c<7; c++) {
             int wday=(c+1)%7;
             uint16_t sum=0;
-            if(hm_week_off==0) for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
+            for(int q=0;q<4;q++) sum+=heatmap[wday][hour*4+q];
             uint8_t avg=(uint8_t)(sum/4);
             uint8_t t=maxv>0?(uint8_t)((uint16_t)avg*255/maxv):0;
             dsc.bg_color=lv_color_mix(c_hi,c_lo,t);
@@ -2613,9 +2627,7 @@ static void do_switch(Screen s) {
             cur_scr=SCR_GRAPH; return;
         case SCR_HEATMAP:
             if(!scr_heatmap){ esp_task_wdt_reset(); build_scr_heatmap(); }
-            hm_week_off=0;
-            hm_update_week_label();
-            if(hm_view) lv_obj_invalidate(hm_view);
+            heatmap_goto_week(0);
             lv_scr_load_anim(scr_heatmap,LV_SCR_LOAD_ANIM_NONE,0,0,false);
             cur_scr=SCR_HEATMAP; return;
         case SCR_HIST_MENU:
@@ -3043,10 +3055,7 @@ void loop() {
         } else if(cur_scr==SCR_HEATMAP){
             enc_accum+=d; int steps=enc_accum/2; enc_accum%=2;
             if(steps!=0){
-                hm_week_off += steps;            // CCW→semanas pasadas, CW→volver al presente
-                if(hm_week_off>0) hm_week_off=0; // no hay futuro
-                hm_update_week_label();
-                if(hm_view) lv_obj_invalidate(hm_view);
+                heatmap_goto_week(hm_week_off + steps); // CCW→semanas pasadas, CW→volver al presente
             }
         } else if(cur_scr==SCR_TV){
             // Encoder activity: wake screen if dimmed
@@ -3238,8 +3247,7 @@ void loop() {
         // Presencia (input[4] invertido: false = hay alguien)
         if(a6v3.input[4]!=hp_input[4]){
             bool pres=!a6v3.input[4];
-            log_event(EVT_PRESENCE, pres?1:0);
-            if(pres) hm_presence(true);
+            log_event(EVT_PRESENCE, pres?1:0);  // el mapa de presencia se reconstruye de aquí
             hp_input[4]=a6v3.input[4];
         }
         // Inundación (input[1]: true = activo)
@@ -3271,10 +3279,6 @@ void loop() {
     if(millis()-last_temp_log >= 300000UL){ // cada 5 min
         last_temp_log=millis();
         log_temp(tuya_temp_int, wx.ok ? wx.temp : NAN);
-    }
-    if(millis()-hm_save_ts >= 3600000UL){ // cada hora
-        hm_save_ts=millis();
-        hm_save();
     }
     // Volcado a flash con la pantalla en dim (atenuada, el glitch no se ve), pero solo
     // si hay >=50 acumulados → agrupa escrituras y reduce desgaste de flash.
