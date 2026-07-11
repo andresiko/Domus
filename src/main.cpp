@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.28"
+#define FW_VERSION "v2.29"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -96,6 +96,7 @@ static bool grace_beeps[3]      = {};
 
 // ── Estado A6v3 ──────────────────────────────────────────────
 struct { bool input[7]={}; bool output[7]={}; } a6v3;
+static bool ota_started = false;   // OTA arrancado (solo tras conectar al WiFi)
 static bool ui_needs_update = false;
 static bool alarm_armed     = false;
 static bool intruder_active = false;
@@ -2944,7 +2945,15 @@ void setup() {
     Serial.println("Pantalla lista.");
 
     WiFiManager wm;
-    if(wm.autoConnect("DOMUS-Setup")){
+    // Arranque NO bloqueante: si el router aun no esta listo (p.ej. tras un corte
+    // de luz), acotar el intento y el portal para no colgar el setup — asi el
+    // broker y la pantalla arrancan igual. El WiFi se reconecta en segundo plano
+    // (vigia en loop) cuando el router vuelve, sin tener que reiniciar a mano.
+    wm.setConnectTimeout(20);         // intento de conexion acotado (s)
+    wm.setConfigPortalTimeout(120);   // el portal AP se cierra tras 2 min y sigue
+    bool wifi_ok = wm.autoConnect("DOMUS-Setup");
+    WiFi.setAutoReconnect(true);
+    if(wifi_ok){
         Serial.printf("WiFi: %s\n",WiFi.localIP().toString().c_str());
         if(lbl_settings_ip){
             char buf[40]; snprintf(buf,sizeof(buf),"IP: %s",WiFi.localIP().toString().c_str());
@@ -2954,7 +2963,11 @@ void setup() {
         ArduinoOTA.setHostname("domus-crowpanel");
         ArduinoOTA.setPassword("domusota");
         ArduinoOTA.begin();
+        ota_started = true;
         Serial.println("OTA listo (domus-crowpanel)");
+    } else {
+        WiFi.mode(WIFI_STA);   // asegurar modo estacion para reconectar en segundo plano
+        Serial.println("WiFi no conectado al arrancar — se reintentara en segundo plano");
     }
     broker.init(1883);
 
@@ -3312,6 +3325,27 @@ void loop() {
     // (Tª interior llega por MQTT DOMUS/ENV; ya no se consulta la nube Tuya)
     { static unsigned long domus_pub_last=0;
       if(millis()-domus_pub_last>=60000UL){ domus_pub_last=millis(); mqtt_publish_status(); } }
+
+    // Vigía WiFi: si el router no estaba listo al arrancar (corte de luz) o se cae,
+    // reconectar en segundo plano sin bloquear. Al recuperar WiFi, arrancar el OTA
+    // (que necesita red) si aún no estaba activo, y refrescar la IP en Ajustes.
+    { static unsigned long wifi_chk=0;
+      if(millis()-wifi_chk >= 10000UL){
+          wifi_chk=millis();
+          if(WiFi.status()!=WL_CONNECTED){
+              WiFi.reconnect();
+          } else if(!ota_started){
+              ArduinoOTA.setHostname("domus-crowpanel");
+              ArduinoOTA.setPassword("domusota");
+              ArduinoOTA.begin();
+              ota_started=true;
+              if(lbl_settings_ip){
+                  char b[40]; snprintf(b,sizeof(b),"IP: %s",WiFi.localIP().toString().c_str());
+                  lv_label_set_text(lbl_settings_ip,b);
+              }
+              Serial.println("OTA listo (reconexion WiFi en segundo plano)");
+          }
+      } }
 
     if(millis()-last_status>=5000){
         last_status=millis();
