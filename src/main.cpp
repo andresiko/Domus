@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.30"
+#define FW_VERSION "v2.31"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -97,6 +97,7 @@ static bool grace_beeps[3]      = {};
 // ── Estado A6v3 ──────────────────────────────────────────────
 struct { bool input[7]={}; bool output[7]={}; } a6v3;
 static bool ota_started = false;   // OTA arrancado (solo tras conectar al WiFi)
+static bool a6v3_seen   = false;   // true tras recibir el primer STATE real de la A6v3
 static bool ui_needs_update = false;
 static bool alarm_armed     = false;
 static bool intruder_active = false;
@@ -197,6 +198,7 @@ public:
                 if (!doc[ki]["value"].isNull()) a6v3.input[i]=doc[ki]["value"].as<bool>();
                 if (!doc[ko]["value"].isNull()) a6v3.output[i]=doc[ko]["value"].as<bool>();
             }
+            a6v3_seen = true;      // ya tenemos datos reales de la A6v3
             ui_needs_update = true;
         }
         return true;
@@ -2560,9 +2562,25 @@ static void update_broker_status() {
 }
 
 // ── ALARMAS ───────────────────────────────────────────────────
+// Anti-falsos: la condicion debe mantenerse este tiempo seguido antes de disparar.
+static const uint32_t ALARM_DEBOUNCE_MS = 3000;
+
 static void check_alarms() {
+    // 1) Sin datos reales de la A6v3 todavia (arranque del panel): NO evaluar. Las
+    //    entradas valen 0 por defecto y humo/PIR son activo-bajo (0 = activo), asi
+    //    que evaluar aqui daria HUMO + presencia FALSOS.
+    if(!a6v3_seen) return;
+    uint32_t now = millis();
+
+    // 2) Debounce: exige que la condicion se mantenga varios segundos seguidos. Absorbe
+    //    lecturas transitorias todo-a-cero al (re)conectar la A6v3 (que se leerian como
+    //    humo + presencia). check_alarms() se llama cada ciclo, asi que si el valor real
+    //    llega en <3s, la condicion se limpia y NO dispara.
     bool flood=a6v3.input[1], smoke=!a6v3.input[5];
-    if((flood||smoke)&&!critical_alert){
+    static uint32_t crit_since=0;
+    if(flood||smoke){ if(!crit_since) crit_since=now; } else crit_since=0;
+    if(crit_since && (now-crit_since)>=ALARM_DEBOUNCE_MS && !critical_alert){
+        Serial.printf("[ALARM] CRIT flood=%d smoke=%d (estable %lums)\n",flood,smoke,(unsigned long)(now-crit_since));
         critical_alert=true; alarm_state=AS_SOUNDING; beep_seq={}; siren_off_at=0;
         relay_set(3,true);
         log_event(EVT_ALARM_TRIGGER, 1, flood ? EVT_FLOOD : EVT_SMOKE);
@@ -2573,7 +2591,12 @@ static void check_alarms() {
         request_wake(false);
         go_to(SCR_ALARM_CRIT);
     }
-    if(alarm_state==AS_ARMED&&!a6v3.input[4]&&!intruder_active){
+
+    static uint32_t intr_since=0;
+    bool intr_cond = (alarm_state==AS_ARMED && !a6v3.input[4] && !intruder_active);
+    if(intr_cond){ if(!intr_since) intr_since=now; } else intr_since=0;
+    if(intr_since && (now-intr_since)>=ALARM_DEBOUNCE_MS){
+        Serial.printf("[ALARM] INTRUSION (PIR estable %lums)\n",(unsigned long)(now-intr_since));
         intruder_active=true; alarm_state=AS_GRACE; alarm_ts=millis();
         memset(grace_beeps,0,sizeof(grace_beeps));
         lv_label_set_text(lbl_alarm_type,"INTRUSION");
@@ -3014,6 +3037,7 @@ static bool heat_blink_state=false;
 void loop() {
     ArduinoOTA.handle();
     broker.update();
+    check_alarms();   // cada ciclo (con gate + debounce), no solo al llegar un STATE
 
     // Salir del salvapantallas: recargar la pantalla previa (fuera de callbacks de input)
     if (wake_reload_pending) {
@@ -3247,7 +3271,14 @@ void loop() {
     }
 
     if(ui_needs_update){
-        check_alarms(); update_home(); update_sensors_tile(); update_relays_tile(); update_alarm_tile();
+        // Sembrar el estado previo con el primer STATE real de la A6v3, para no
+        // registrar transiciones falsas (entradas en 0 por defecto) al arrancar.
+        static bool hp_seeded=false;
+        if(a6v3_seen && !hp_seeded){
+            for(int i=0;i<7;i++){ hp_input[i]=a6v3.input[i]; hp_output[i]=a6v3.output[i]; }
+            hp_seeded=true;
+        }
+        update_home(); update_sensors_tile(); update_relays_tile(); update_alarm_tile();
         check_heating_auto();
 
         // ── Log cambios de estado ─────────────────────────────
