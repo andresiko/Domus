@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.29"
+#define FW_VERSION "v2.30"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -123,13 +123,14 @@ static void start_beep_seq(int n, int dur=100, int pause=200) {
 struct {
     float temp=NAN; float wind=0; float rain_now=0; bool ok=false; int code=-1;
     float h_temp[12]={}; float h_rain[12]={};
+    float tmax[2]={NAN,NAN}; float tmin[2]={NAN,NAN}; // [0]=hoy [1]=manana (previsión diaria)
 } wx;
 static unsigned long wx_last = 0;
 #define WX_URL "https://api.open-meteo.com/v1/forecast" \
     "?latitude=42.80632457618044&longitude=-1.6290100870212767" \
     "&current=temperature_2m,wind_speed_10m,precipitation" \
     "&hourly=precipitation,wind_speed_10m,temperature_2m" \
-    "&daily=weather_code&forecast_days=1&timezone=Europe%2FMadrid"
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=2&timezone=Europe%2FMadrid"
 
 // ── Tuya API ─────────────────────────────────────────────────
 #define TUYA_CLIENT_ID     "df33cuper4k8ce7qstn8"
@@ -326,6 +327,7 @@ static uint8_t tile_col = 1, tile_row = 1; // posición actual (home=1,1)
 static lv_obj_t *harc[5], *rarc[4], *arc_alarm_zone, *arc_settings_zone, *lbl_alarm_badge;
 static lv_obj_t *lbl_sistema = nullptr, *lbl_temp_ext, *lbl_weather, *lbl_temp_int, *lbl_humidity;
 static lv_obj_t *lbl_wx_forecast = nullptr;
+static lv_obj_t *lbl_wx_forecast2 = nullptr;
 static lv_obj_t *lbl_wx_icon     = nullptr;
 extern "C" const lv_font_t weather_font;  // src/weather_font.c — iconos MDI del tiempo
 extern "C" const lv_font_t icon_font;     // src/icon_font.c    — icono home-thermometer (calefaccion)
@@ -1066,8 +1068,10 @@ static void build_tile_home() {
     // Meteo más grande a la izquierda + icono del tiempo grande a la derecha
     lbl_weather    =centered_label(tile_home,"-- km/h  0.0 mm/h", &lv_font_montserrat_20,COL_MUTED, -50);
     lv_obj_align(lbl_weather, LV_ALIGN_CENTER, -34, -50);
-    lbl_wx_forecast=centered_label(tile_home,"--\xc2\xb0 / --\xc2\xb0",&lv_font_montserrat_20,COL_MUTED,-22);
+    lbl_wx_forecast=centered_label(tile_home,"Hoy --\xc2\xb0/--\xc2\xb0",&lv_font_montserrat_20,COL_MUTED,-22);
     lv_obj_align(lbl_wx_forecast, LV_ALIGN_CENTER, -34, -22);
+    lbl_wx_forecast2=centered_label(tile_home,"",&lv_font_montserrat_20,COL_MUTED,+6);
+    lv_obj_align(lbl_wx_forecast2, LV_ALIGN_CENTER, -34, +6);
     lbl_wx_icon    =lv_label_create(tile_home);
     lv_obj_set_style_text_font(lbl_wx_icon,&weather_font,0);
     lv_obj_set_style_text_color(lbl_wx_icon,lv_color_hex(COL_TEXT),0);
@@ -2506,14 +2510,14 @@ static void update_weather_display() {
     snprintf(buf,sizeof(buf),"%d km/h  %.1f mm/h",(int)wx.wind,wx.rain_now);
     lv_label_set_text(lbl_weather,buf);
     if(lbl_wx_forecast) {
-        float tmax=wx.h_temp[0], tmin=wx.h_temp[0], rsum=0;
-        for(int i=0;i<12;i++){
-            if(wx.h_temp[i]>tmax) tmax=wx.h_temp[i];
-            if(wx.h_temp[i]<tmin) tmin=wx.h_temp[i];
-            rsum+=wx.h_rain[i];
-        }
-        snprintf(buf,sizeof(buf),"%.0f\xc2\xb0 / %.0f\xc2\xb0  %.1fmm",tmax,tmin,rsum);
+        if(!isnan(wx.tmax[0])) snprintf(buf,sizeof(buf),"Hoy %.0f\xc2\xb0/%.0f\xc2\xb0",wx.tmax[0],wx.tmin[0]);
+        else                   snprintf(buf,sizeof(buf),"Hoy --\xc2\xb0/--\xc2\xb0");
         lv_label_set_text(lbl_wx_forecast,buf);
+    }
+    if(lbl_wx_forecast2) {
+        if(!isnan(wx.tmax[1])) snprintf(buf,sizeof(buf),"Manana %.0f\xc2\xb0/%.0f\xc2\xb0",wx.tmax[1],wx.tmin[1]);
+        else                   buf[0]='\0';
+        lv_label_set_text(lbl_wx_forecast2,buf);
     }
     if(lbl_wx_icon) lv_label_set_text(lbl_wx_icon, wmo_icon(wx.code));
 }
@@ -2808,6 +2812,10 @@ static void fetch_weather() {
                 wx.h_rain[i]=doc["hourly"]["precipitation"][i].as<float>();
             }
             wx.wind=wmax; wx.code=doc["daily"]["weather_code"][0] | -1; wx.ok=true;
+            for(int d=0;d<2;d++){
+                wx.tmax[d]=doc["daily"]["temperature_2m_max"][d] | (float)NAN;
+                wx.tmin[d]=doc["daily"]["temperature_2m_min"][d] | (float)NAN;
+            }
             update_weather_display();
         }
     }
