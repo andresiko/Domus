@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.31"
+#define FW_VERSION "v2.32"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -128,7 +128,7 @@ struct {
 } wx;
 static unsigned long wx_last = 0;
 #define WX_URL "https://api.open-meteo.com/v1/forecast" \
-    "?latitude=42.80632457618044&longitude=-1.6290100870212767" \
+    "?latitude=42.8052107&longitude=-1.6286565" \
     "&current=temperature_2m,wind_speed_10m,precipitation" \
     "&hourly=precipitation,wind_speed_10m,temperature_2m" \
     "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=2&timezone=Europe%2FMadrid"
@@ -3360,7 +3360,7 @@ void loop() {
     // ─────────────────────────────────────────────────────────────
 
     if(scr_change){ scr_change=false; do_switch(pend_scr); }
-    if(millis()-wx_last  >30UL*60000UL) fetch_weather();
+    if(millis()-wx_last  >10UL*60000UL) fetch_weather();  // meteo cada 10 min (fuente refresca ~15 min; limite 10k/dia)
     // (Tª interior llega por MQTT DOMUS/ENV; ya no se consulta la nube Tuya)
     { static unsigned long domus_pub_last=0;
       if(millis()-domus_pub_last>=60000UL){ domus_pub_last=millis(); mqtt_publish_status(); } }
