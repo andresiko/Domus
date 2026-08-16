@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.32"
+#define FW_VERSION "v2.33"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -2737,12 +2737,12 @@ static bool tuya_get_token() {
     http.end(); return ok;
 }
 static void mqtt_publish_debug() {  // telemetria del buffer de eventos → DOMUS/debug
-    char dbg[140];
+    char dbg[180];
     snprintf(dbg,sizeof(dbg),
-        "{\"buf\":%u,\"max\":%u,\"eh\":%lu,\"nflush\":%lu,\"nevt\":%lu,\"dropped\":%lu,\"dim\":%s}",
+        "{\"buf\":%u,\"max\":%u,\"eh\":%lu,\"nflush\":%lu,\"nevt\":%lu,\"dropped\":%lu,\"dim\":%s,\"wx_ok\":%s,\"wx_t\":%.1f}",
         (unsigned)evt_buf_n,(unsigned)EVT_BUF_N,(unsigned long)hist_eh,
         (unsigned long)g_nflush,(unsigned long)g_nevt,(unsigned long)g_dropped,
-        screen_dimmed?"true":"false");
+        screen_dimmed?"true":"false", wx.ok?"true":"false", wx.ok?wx.temp:0.0f);
     broker.publish("DOMUS/debug", std::string(dbg));
 }
 static void mqtt_publish_status() {
@@ -3360,7 +3360,8 @@ void loop() {
     // ─────────────────────────────────────────────────────────────
 
     if(scr_change){ scr_change=false; do_switch(pend_scr); }
-    if(millis()-wx_last  >10UL*60000UL) fetch_weather();  // meteo cada 10 min (fuente refresca ~15 min; limite 10k/dia)
+    // meteo: 10 min normal; si aun no hay dato valido (fallo al arrancar), reintentar cada 1 min
+    if(millis()-wx_last > (wx.ok ? 10UL*60000UL : 60000UL)) fetch_weather();
     // (Tª interior llega por MQTT DOMUS/ENV; ya no se consulta la nube Tuya)
     { static unsigned long domus_pub_last=0;
       if(millis()-domus_pub_last>=60000UL){ domus_pub_last=millis(); mqtt_publish_status(); } }
