@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.33"
+#define FW_VERSION "v2.34"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -151,6 +151,9 @@ static unsigned long mqtt_last_activity  = 0;
 static time_t        mqtt_last_conn_epoch = 0;
 static volatile bool mqtt_cmd_disarm     = false;
 static volatile bool mqtt_cmd_arm        = false;
+static volatile bool     mqtt_cmd_log     = false;  // volcar historial por MQTT (DOMUS/log)
+static volatile uint8_t  mqtt_log_type    = 0;      // 0 = todos los tipos de evento
+static volatile uint16_t mqtt_log_n       = 100;    // maximo de eventos a enviar
 static time_t        domus_pub_epoch      = 0;
 
 class DomusBroker : public sMQTTBroker {
@@ -175,6 +178,13 @@ public:
                             mqtt_cmd_arm = true;
                         else
                             Serial.println("[CMD] arm via MQTT: PIN incorrecto");
+                    } else if (cmd == "log") {
+                        // Volcar historial a DOMUS/log. Opcional: "type" (2=Agua,
+                        // 3=Calef, 9=Presencia...; 0=todos) y "n" (maximo de eventos).
+                        mqtt_log_type = (uint8_t)(doc["type"] | 0);
+                        mqtt_log_n    = (uint16_t)(doc["n"] | 100);
+                        mqtt_cmd_log  = true;
+                        Serial.println("[CMD] log via MQTT");
                     }
                 }
                 return true;
@@ -2745,6 +2755,50 @@ static void mqtt_publish_debug() {  // telemetria del buffer de eventos → DOMU
         screen_dimmed?"true":"false", wx.ok?"true":"false", wx.ok?wx.temp:0.0f);
     broker.publish("DOMUS/debug", std::string(dbg));
 }
+
+// Vuelca el historial de eventos (/evt.bin) al topic DOMUS/log, del mas reciente al
+// mas antiguo, troceado en varios mensajes. Permite consultar en remoto meses de
+// historial (Agua ON/OFF, presencia, alarmas...) sin necesidad de cable serie.
+static void mqtt_dump_log() {
+    flush_events();                      // incluir lo pendiente en RAM
+    File f = LittleFS.open("/evt.bin", "r");
+    if(!f){ broker.publish("DOMUS/log", std::string("ERR sin fichero")); return; }
+    uint32_t total = f.size() / sizeof(EvtRec);
+    if(total == 0){ f.close(); broker.publish("DOMUS/log", std::string("ERR vacio")); return; }
+    uint32_t count = total < MAX_EVT ? total : MAX_EVT;
+    uint8_t  ftype = mqtt_log_type;
+    uint16_t maxn  = mqtt_log_n;
+    uint32_t head  = hist_eh;
+    char msg[480]; int pos = 0; uint16_t sent = 0;
+    msg[0] = 0;
+    for(uint32_t i = 0; i < count && sent < maxn; i++){
+        if((i & 0x3F) == 0) esp_task_wdt_reset();
+        uint32_t idx = (head + MAX_EVT - 1 - i) % MAX_EVT;
+        EvtRec r;
+        f.seek(idx * sizeof(EvtRec));
+        if(f.read((uint8_t*)&r, sizeof(r)) != sizeof(r)) continue;
+        if(r.ts < 1000000000UL) continue;
+        if(ftype && r.type != ftype) continue;
+        time_t ts = (time_t)r.ts; struct tm t; localtime_r(&ts, &t);
+        int n = snprintf(msg + pos, sizeof(msg) - pos,
+            "%02d/%02d/%04d %02d:%02d:%02d|%s\n",
+            t.tm_mday, t.tm_mon+1, t.tm_year+1900,
+            t.tm_hour, t.tm_min, t.tm_sec, evt_name(r.type, r.value, r.aux));
+        if(n < 0) break;
+        pos += n; sent++;
+        if(pos > (int)sizeof(msg) - 80){          // enviar trozo y continuar
+            broker.publish("DOMUS/log", std::string(msg));
+            pos = 0; msg[0] = 0;
+            delay(20);
+        }
+    }
+    if(pos > 0) broker.publish("DOMUS/log", std::string(msg));
+    f.close();
+    char fin[72];
+    snprintf(fin, sizeof(fin), "FIN enviados=%u type=%u", (unsigned)sent, (unsigned)ftype);
+    broker.publish("DOMUS/log", std::string(fin));
+    Serial.printf("[LOG] volcados %u eventos\n", (unsigned)sent);
+}
 static void mqtt_publish_status() {
     const char *as =
         alarm_state==AS_OFF     ?"OFF"     :
@@ -3341,6 +3395,7 @@ void loop() {
     // ─────────────────────────────────────────────────────────
 
     // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
+    if(mqtt_cmd_log){ mqtt_cmd_log=false; mqtt_dump_log(); }
     if(mqtt_cmd_disarm){
         mqtt_cmd_disarm=false;
         alarm_state=AS_OFF; alarm_armed=false; intruder_active=false;
