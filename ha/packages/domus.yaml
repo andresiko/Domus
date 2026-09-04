@@ -368,6 +368,10 @@ automation:
           parse_mode: markdown
           message: "🔓 *Alarma desarmada*"
 
+  # Ventana del ciclo de mantenimiento (temporizador de la KinCony):
+  # lunes 04:00, cierra 1 minuto y reabre. Durante esa ventana NO se mandan
+  # los avisos genericos de abierta/cerrada; se manda un unico mensaje claro
+  # desde domus_tg_agua_mantenimiento.
   - id: domus_tg_agua_on
     alias: "DOMUS Telegram - Valvula agua abierta"
     trigger:
@@ -375,6 +379,13 @@ automation:
         entity_id: switch.agua
         to: "on"
         not_from: ["unavailable", "unknown"]
+    condition:
+      - condition: not
+        conditions:
+          - condition: time
+            after: "03:59:00"
+            before: "04:05:00"
+            weekday: [mon]
     action:
       - service: telegram_bot.send_message
         data:
@@ -391,6 +402,13 @@ automation:
         entity_id: switch.agua
         to: "off"
         not_from: ["unavailable", "unknown"]
+    condition:
+      - condition: not
+        conditions:
+          - condition: time
+            after: "03:59:00"
+            before: "04:05:00"
+            weekday: [mon]
     action:
       - service: telegram_bot.send_message
         data:
@@ -399,6 +417,50 @@ automation:
           message: "🔒 Válvula agua *cerrada*"
           inline_keyboard:
             - - ["🔓 Abrir válvula", "/agua_abrir"]
+
+  - id: domus_tg_agua_mantenimiento
+    alias: "DOMUS Telegram - Ciclo mantenimiento valvula agua"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: switch.agua
+        to: "off"
+        not_from: ["unavailable", "unknown"]
+    condition:
+      - condition: time
+        after: "03:59:00"
+        before: "04:05:00"
+        weekday: [mon]
+    action:
+      # Esperar a que el ciclo la reabra (normalmente 1 minuto)
+      - wait_for_trigger:
+          - platform: state
+            entity_id: switch.agua
+            to: "on"
+        timeout: "00:05:00"
+        continue_on_timeout: true
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ wait.trigger is not none }}"
+            sequence:
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: [133097449, 205920636]
+                  parse_mode: markdown
+                  message: "🔧 *Mantenimiento semanal*
+Válvula de agua ciclada correctamente (cerrada y reabierta). Todo en orden."
+        default:
+          - service: telegram_bot.send_message
+            data:
+              chat_id: [133097449, 205920636]
+              parse_mode: markdown
+              message: "⚠️ *ATENCIÓN — Válvula de agua*
+Se cerró en el ciclo de mantenimiento y *NO ha vuelto a abrirse* tras 5 minutos.
+Revisa la instalación."
+              inline_keyboard:
+                - - ["🔓 Abrir válvula", "/agua_abrir"]
 
   - id: domus_tg_temp_low
     alias: "DOMUS Telegram - Temperatura baja"
