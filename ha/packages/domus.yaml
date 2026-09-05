@@ -119,20 +119,53 @@ mqtt:
         {% else %}Programa{% endif %}
       icon: mdi:thermostat
 
+# ── REGISTRO HISTORICO (recorder) ────────────────────────────────────────
+# Antes: solo 10 dias y ~51 MB, con el 57% del volumen generado por ruido:
+# la automatizacion del puente Xiaomi (49%) y los sensores de estadisticas
+# de AdGuard (8%). Excluyendolos, 90 dias ocupan menos que antes 10 dias.
+# Los sensores REALES de temperatura/humedad SI se siguen guardando.
+recorder:
+  purge_keep_days: 90
+  exclude:
+    entities:
+      - automation.domus_publicar_ta_h_xiaomi_al_panel_mqtt
+      - sun.sun
+    entity_globs:
+      - sensor.adguard_home_*
+
 automation:
+
+  # Limpieza del historial ya acumulado de las entidades recien excluidas.
+  # Idempotente: al estar excluidas ya no generan datos nuevos, asi que en
+  # arranques posteriores no encuentra nada que borrar.
+  - id: domus_recorder_limpieza_ruido
+    alias: "DOMUS - Limpiar historial de entidades excluidas"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: homeassistant
+        event: start
+    action:
+      - delay: "00:02:00"
+      - service: recorder.purge_entities
+        target:
+          entity_id:
+            - automation.domus_publicar_ta_h_xiaomi_al_panel_mqtt
+            - sun.sun
+        data:
+          keep_days: 0
+          entity_globs:
+            - sensor.adguard_home_*
 
   # ── FUENTE Tª/H INTERIOR (Xiaomi BLE local → panel por MQTT) ──────────────
   - id: domus_env_xiaomi_to_panel
     alias: "DOMUS - Publicar Tª/H Xiaomi al panel (MQTT)"
     mode: single
     max_exceeded: silent
+    # El Xiaomi emite por BLE cada ~25 s. Disparar con CADA emision suponia
+    # ~5.300 ejecuciones/dia (y otros tantos registros en la BD) para un dato
+    # que en pantalla no necesita ese refresco. Basta cada 5 min + al arrancar.
     trigger:
-      - platform: state
-        entity_id:
-          - sensor.temperature_humidity_sensor_a5ef_temperature
-          - sensor.temperature_humidity_sensor_a5ef_humidity
-        for:
-          seconds: 3
       - platform: homeassistant
         event: start
       - platform: time_pattern
