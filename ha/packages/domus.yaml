@@ -1,12 +1,17 @@
 # DOMUS — Entidades y automatizaciones Home Assistant v2.0
 # packages/domus.yaml
 
+# Los reles y entradas se leen de DOMUS/status (lo publica el panel cada 60 s y
+# ante cada cambio), NO de A6v3/.../STATE. Motivo: el 07/09/2026 HA dejo de
+# recibir A6v3/STATE y se quedo 8 h con la valvula marcada como cerrada estando
+# abierta, sin forma de recuperarse. Con DOMUS/status, si se pierde un mensaje se
+# resincroniza en <=60 s. Los command_topic siguen yendo directos a la KinCony.
 mqtt:
   switch:
     - name: "Agua"
       unique_id: domus_relay_agua
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if value_json.output1.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.agua else 'OFF' }}"
       state_on: "ON"
       state_off: "OFF"
       command_topic: "A6v3/30EDA03B1378/SET"
@@ -16,8 +21,8 @@ mqtt:
 
     - name: "Sirena"
       unique_id: domus_relay_sirena
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if value_json.output3.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.sirena else 'OFF' }}"
       state_on: "ON"
       state_off: "OFF"
       command_topic: "A6v3/30EDA03B1378/SET"
@@ -27,8 +32,8 @@ mqtt:
 
     - name: "Calefaccion Relay"
       unique_id: domus_relay_calef
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if value_json.output2.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.heat_relay else 'OFF' }}"
       state_on: "ON"
       state_off: "OFF"
       command_topic: "A6v3/30EDA03B1378/SET"
@@ -39,32 +44,32 @@ mqtt:
   binary_sensor:
     - name: "Inundacion"
       unique_id: domus_sensor_flood
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if value_json.input1.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.flood else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
       device_class: moisture
 
     - name: "Movimiento"
       unique_id: domus_sensor_pir
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if not value_json.input4.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.pir else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
       device_class: motion
 
     - name: "Humo Calor"
       unique_id: domus_sensor_smoke
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if not value_json.input5.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.smoke else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
       device_class: smoke
 
     - name: "Red Electrica"
       unique_id: domus_sensor_power
-      state_topic: "A6v3/30EDA03B1378/STATE"
-      value_template: "{{ 'ON' if value_json.input6.value else 'OFF' }}"
+      state_topic: "DOMUS/status"
+      value_template: "{{ 'ON' if value_json.power else 'OFF' }}"
       payload_on: "ON"
       payload_off: "OFF"
       device_class: power
@@ -467,16 +472,15 @@ automation:
         weekday: [mon]
     action:
       # Esperar a que el ciclo la reabra (normalmente 1 minuto)
-      - wait_for_trigger:
-          - platform: state
-            entity_id: switch.agua
-            to: "on"
-        timeout: "00:05:00"
+      # wait_template (no wait_for_trigger): comprueba el ESTADO, asi que vale
+      # tanto si el cambio llega despues como si ya estaba abierta al evaluar.
+      - wait_template: "{{ is_state('switch.agua', 'on') }}"
+        timeout: "00:10:00"
         continue_on_timeout: true
       - choose:
           - conditions:
               - condition: template
-                value_template: "{{ wait.trigger is not none }}"
+                value_template: "{{ wait.completed }}"
             sequence:
               - service: telegram_bot.send_message
                 data:
@@ -490,7 +494,7 @@ Válvula de agua ciclada correctamente (cerrada y reabierta). Todo en orden."
               chat_id: [133097449, 205920636]
               parse_mode: markdown
               message: "⚠️ *ATENCIÓN — Válvula de agua*
-Se cerró en el ciclo de mantenimiento y *NO ha vuelto a abrirse* tras 5 minutos.
+Se cerró en el ciclo de mantenimiento y *NO ha vuelto a abrirse* tras 10 minutos.
 Revisa la instalación."
               inline_keyboard:
                 - - ["🔓 Abrir válvula", "/agua_abrir"]

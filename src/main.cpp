@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.34"
+#define FW_VERSION "v2.35"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -2805,12 +2805,20 @@ static void mqtt_publish_status() {
         alarm_state==AS_ARMING  ?"ARMING"  :
         alarm_state==AS_ARMED   ?"ARMED"   :
         alarm_state==AS_GRACE   ?"GRACE"   :"SOUNDING";
-    char buf[160];
+    // Incluye TODO el estado de reles/entradas para que HA pueda leerlo de aqui:
+    // este topic se republica cada 60 s (y ante cada cambio), asi que si HA pierde
+    // un mensaje se resincroniza solo. Leyendo de A6v3/STATE no habia forma de
+    // recuperarse: HA se quedaba con el ultimo valor visto (bug del 07/09/2026).
+    char buf[240];
     if(isnan(tuya_temp_int))
         snprintf(buf,sizeof(buf),
             "{\"alarm\":\"%s\",\"heat_mode\":%d,\"heat_relay\":%s,"
+            "\"agua\":%s,\"sirena\":%s,\"pir\":%s,"
             "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
             as,(int)heat_mode,a6v3.output[2]?"true":"false",
+            a6v3.output[1]?"true":"false",
+            a6v3.output[3]?"true":"false",
+            a6v3.input[4]?"false":"true",
             a6v3.input[1]?"true":"false",
             a6v3.input[5]?"false":"true",
             a6v3.input[6]?"true":"false");
@@ -2818,9 +2826,13 @@ static void mqtt_publish_status() {
         snprintf(buf,sizeof(buf),
             "{\"alarm\":\"%s\",\"temp_int\":%.1f,\"humidity\":%.0f,"
             "\"heat_mode\":%d,\"heat_relay\":%s,"
+            "\"agua\":%s,\"sirena\":%s,\"pir\":%s,"
             "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
             as,tuya_temp_int,isnan(tuya_humidity)?0.0f:tuya_humidity,
             (int)heat_mode,a6v3.output[2]?"true":"false",
+            a6v3.output[1]?"true":"false",
+            a6v3.output[3]?"true":"false",
+            a6v3.input[4]?"false":"true",
             a6v3.input[1]?"true":"false",
             a6v3.input[5]?"false":"true",
             a6v3.input[6]?"true":"false");
@@ -3375,6 +3387,18 @@ void loop() {
         }
         // Nota: presencia/PIR (input[4], "el hall") NO enciende la pantalla por
         // si misma; solo lo hace via check_alarms cuando dispara la intrusion.
+
+        // Republicar el estado en cuanto cambie algo: HA lee los reles/entradas de
+        // DOMUS/status, asi que sin esto tendria hasta 60 s de retardo al pulsar.
+        { static bool hp_seen=false;
+          static bool pi[7]={}, po[7]={};
+          bool diff=false;
+          for(int i=1;i<7;i++){ if(pi[i]!=a6v3.input[i]||po[i]!=a6v3.output[i]) diff=true; }
+          if(a6v3_seen && (diff || !hp_seen)){
+              for(int i=1;i<7;i++){ pi[i]=a6v3.input[i]; po[i]=a6v3.output[i]; }
+              hp_seen=true;
+              mqtt_publish_status();
+          } }
         // ─────────────────────────────────────────────────────
 
         ui_needs_update=false;
