@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.35"
+#define FW_VERSION "v2.36"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -112,6 +112,12 @@ static unsigned long pin_open_ts   = 0; // debounce toque fantasma del encoder
 
 // ── Sirena / beeps ───────────────────────────────────────────
 static unsigned long siren_off_at = 0;
+// Silenciado temporal de la alarma CRITICA (humo/inundacion): al apagar la sirena
+// se concede este margen para ventilar/secar sin que vuelva a sonar cada pocos
+// segundos. Si pasado el plazo la condicion sigue activa, vuelve a dispararse.
+static const uint32_t CRIT_SNOOZE_MS  = 15UL*60UL*1000UL;   // 15 min
+static uint32_t       crit_snooze_until = 0;                 // 0 = sin silenciar
+static volatile bool  mqtt_cmd_silence  = false;
 struct BeepSeq { int total=0,done=0,dur_ms=100,pause_ms=200; unsigned long next=0; };
 static BeepSeq beep_seq;
 static void start_beep_seq(int n, int dur=100, int pause=200) {
@@ -178,6 +184,9 @@ public:
                             mqtt_cmd_arm = true;
                         else
                             Serial.println("[CMD] arm via MQTT: PIN incorrecto");
+                    } else if (cmd == "silence") {
+                        mqtt_cmd_silence = true;   // apagar sirena + margen de silencio
+                        Serial.println("[CMD] silence via MQTT");
                     } else if (cmd == "log") {
                         // Volcar historial a DOMUS/log. Opcional: "type" (2=Agua,
                         // 3=Calef, 9=Presencia...; 0=todos) y "n" (maximo de eventos).
@@ -2144,9 +2153,23 @@ static void build_tile_settings() {
 }
 
 // ── BUILD OVERLAY ALARMA CRÍTICA ─────────────────────────────
+// Apaga la sirena de una alarma critica y abre el margen de silencio. NO toca la
+// alarma antiintrusion (esa se desarma solo con PIN).
+static void silence_critical() {
+    relay_set(3,false);
+    critical_alert   = false;
+    beep_seq         = {};
+    siren_off_at     = 0;
+    crit_snooze_until = millis() + CRIT_SNOOZE_MS;
+    if(!crit_snooze_until) crit_snooze_until = 1;   // millis()==0 tras overflow
+    alarm_state = alarm_armed ? AS_ARMED : AS_OFF;
+    Serial.printf("[ALARM] sirena silenciada %lu min\n", (unsigned long)(CRIT_SNOOZE_MS/60000UL));
+    mqtt_publish_status();
+}
+
 static void cb_deactivate(lv_event_t *e) {
     if(intruder_active){ pin_for_arm=false; memset(pin_buf,0,5); pin_len=0; go_to(SCR_PIN); }
-    else { relay_set(3,false); critical_alert=false; alarm_state=alarm_armed?AS_ARMED:AS_OFF; mqtt_publish_status(); go_to(SCR_TV); }
+    else { silence_critical(); go_to(SCR_TV); }
 }
 static void build_scr_alarm() {
     scr_alarm=lv_obj_create(nullptr);
@@ -2266,7 +2289,7 @@ static void update_pin_dots() {
 static void pin_check() {
     if(strncmp(pin_buf,cfg_pin,4)==0){
         if(pin_for_arm){ alarm_state=AS_ARMING; alarm_armed=true; alarm_ts=millis(); arming_end_ms=alarm_ts+120000UL; start_beep_seq(1,100); lv_label_set_text(lbl_pin_msg,""); mqtt_publish_status(); go_to(SCR_ARMING_SCR); }
-        else { alarm_state=AS_OFF; alarm_armed=false; intruder_active=false; critical_alert=false; beep_seq={}; siren_off_at=0; relay_set(3,false); log_event(EVT_ALARM_DISARM,1); lv_label_set_text(lbl_pin_msg,""); mqtt_publish_status(); go_to(SCR_TV); }
+        else { alarm_state=AS_OFF; alarm_armed=false; intruder_active=false; critical_alert=false; beep_seq={}; siren_off_at=0; crit_snooze_until=millis()+CRIT_SNOOZE_MS; relay_set(3,false); log_event(EVT_ALARM_DISARM,1); lv_label_set_text(lbl_pin_msg,""); mqtt_publish_status(); go_to(SCR_TV); }
     } else { lv_label_set_text(lbl_pin_msg,"PIN incorrecto"); memset(pin_buf,0,5); pin_len=0; update_pin_dots(); }
 }
 static void cb_pin_key(lv_event_t *e) {
@@ -2589,7 +2612,11 @@ static void check_alarms() {
     bool flood=a6v3.input[1], smoke=!a6v3.input[5];
     static uint32_t crit_since=0;
     if(flood||smoke){ if(!crit_since) crit_since=now; } else crit_since=0;
-    if(crit_since && (now-crit_since)>=ALARM_DEBOUNCE_MS && !critical_alert){
+    // 3) Silenciado temporal: tras apagar la sirena no se vuelve a disparar hasta
+    //    que expira el plazo (resta con signo -> inmune al overflow de millis()).
+    if(crit_snooze_until && (int32_t)(now - crit_snooze_until) >= 0) crit_snooze_until = 0;
+    bool snoozed = (crit_snooze_until != 0);
+    if(crit_since && (now-crit_since)>=ALARM_DEBOUNCE_MS && !critical_alert && !snoozed){
         Serial.printf("[ALARM] CRIT flood=%d smoke=%d (estable %lums)\n",flood,smoke,(unsigned long)(now-crit_since));
         critical_alert=true; alarm_state=AS_SOUNDING; beep_seq={}; siren_off_at=0;
         relay_set(3,true);
@@ -2809,25 +2836,32 @@ static void mqtt_publish_status() {
     // este topic se republica cada 60 s (y ante cada cambio), asi que si HA pierde
     // un mensaje se resincroniza solo. Leyendo de A6v3/STATE no habia forma de
     // recuperarse: HA se quedaba con el ultimo valor visto (bug del 07/09/2026).
-    char buf[240];
+    // minutos que quedan de silencio de la alarma critica (0 = no silenciada)
+    int snooze_min = 0;
+    if(crit_snooze_until){
+        int32_t rest = (int32_t)(crit_snooze_until - millis());
+        if(rest > 0) snooze_min = (int)((rest + 59999) / 60000);
+    }
+    char buf[256];
     if(isnan(tuya_temp_int))
         snprintf(buf,sizeof(buf),
             "{\"alarm\":\"%s\",\"heat_mode\":%d,\"heat_relay\":%s,"
             "\"agua\":%s,\"sirena\":%s,\"pir\":%s,"
-            "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
+            "\"flood\":%s,\"smoke\":%s,\"power\":%s,\"snooze\":%d}",
             as,(int)heat_mode,a6v3.output[2]?"true":"false",
             a6v3.output[1]?"true":"false",
             a6v3.output[3]?"true":"false",
             a6v3.input[4]?"false":"true",
             a6v3.input[1]?"true":"false",
             a6v3.input[5]?"false":"true",
-            a6v3.input[6]?"true":"false");
+            a6v3.input[6]?"true":"false",
+            snooze_min);
     else
         snprintf(buf,sizeof(buf),
             "{\"alarm\":\"%s\",\"temp_int\":%.1f,\"humidity\":%.0f,"
             "\"heat_mode\":%d,\"heat_relay\":%s,"
             "\"agua\":%s,\"sirena\":%s,\"pir\":%s,"
-            "\"flood\":%s,\"smoke\":%s,\"power\":%s}",
+            "\"flood\":%s,\"smoke\":%s,\"power\":%s,\"snooze\":%d}",
             as,tuya_temp_int,isnan(tuya_humidity)?0.0f:tuya_humidity,
             (int)heat_mode,a6v3.output[2]?"true":"false",
             a6v3.output[1]?"true":"false",
@@ -2835,7 +2869,8 @@ static void mqtt_publish_status() {
             a6v3.input[4]?"false":"true",
             a6v3.input[1]?"true":"false",
             a6v3.input[5]?"false":"true",
-            a6v3.input[6]?"true":"false");
+            a6v3.input[6]?"true":"false",
+            snooze_min);
     broker.publish("DOMUS/status", std::string(buf));
     time(&domus_pub_epoch);
     Serial.printf("[DOMUS/status] %s\n", buf);
@@ -3420,10 +3455,12 @@ void loop() {
 
     // ── Comandos MQTT remotos (DOMUS/CMD) ────────────────────────
     if(mqtt_cmd_log){ mqtt_cmd_log=false; mqtt_dump_log(); }
+    if(mqtt_cmd_silence){ mqtt_cmd_silence=false; silence_critical(); go_to(SCR_TV); ui_needs_update=true; }
     if(mqtt_cmd_disarm){
         mqtt_cmd_disarm=false;
         alarm_state=AS_OFF; alarm_armed=false; intruder_active=false;
         critical_alert=false; beep_seq={}; siren_off_at=0;
+        crit_snooze_until=millis()+CRIT_SNOOZE_MS;
         relay_set(3,false); log_event(EVT_ALARM_DISARM,1);
         go_to(SCR_TV); ui_needs_update=true;
     }
