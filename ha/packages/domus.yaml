@@ -684,16 +684,53 @@ Revisa la instalación."
       - condition: template
         value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
     action:
-      - service: mqtt.publish
-        data:
-          topic: "DOMUS/CMD"
-          payload: '{"cmd":"silence"}'
-      - service: telegram_bot.send_message
-        data:
-          chat_id: [133097449, 205920636]
-          parse_mode: markdown
-          message: "🔕 Sirena *apagada*
-15 min de silencio: si al cabo sigue detectando, volvera a sonar."
+      - choose:
+          # /sirena on  -> encender (panico). Va directo al rele de la KinCony.
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args | length > 0 and trigger.event.data.args[0] == 'on' }}"
+            sequence:
+              - service: switch.turn_on
+                target:
+                  entity_id: switch.sirena
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: [133097449, 205920636]
+                  parse_mode: markdown
+                  message: "🚨 Sirena *ENCENDIDA*"
+                  inline_keyboard:
+                    - - ["🔕 Apagar sirena", "/sirena_off"]
+          # /sirena off -> apagar con 15 min de silencio (lo gestiona el panel)
+          - conditions:
+              - condition: template
+                value_template: "{{ trigger.event.data.args | length > 0 and trigger.event.data.args[0] == 'off' }}"
+            sequence:
+              - service: mqtt.publish
+                data:
+                  topic: "DOMUS/CMD"
+                  payload: '{"cmd":"silence"}'
+              - service: telegram_bot.send_message
+                data:
+                  chat_id: [133097449, 205920636]
+                  parse_mode: markdown
+                  message: "🔕 Sirena *apagada*\n15 min de silencio: si al cabo sigue detectando, volvera a sonar."
+        # sin argumentos -> estado + botones
+        default:
+          - service: telegram_bot.send_message
+            data:
+              chat_id: [133097449, 205920636]
+              parse_mode: markdown
+              message: >-
+                🚨 *Sirena*
+
+                Estado: {{ '🔊 SONANDO' if is_state('switch.sirena','on') else 'apagada' }}
+                {%- set sn = states('sensor.silencio_alarma') | int(0) %}
+                {{ "🔕 Silenciada " ~ sn ~ " min mas" if sn > 0 else "" }}
+
+                Uso: /sirena on  o  /sirena off
+              inline_keyboard:
+                - - ["🔊 Encender", "/sirena_on"]
+                  - ["🔕 Apagar", "/sirena_off"]
 
   - id: domus_cmd_armar
     alias: "DOMUS Bot - /armar"
@@ -749,6 +786,25 @@ Revisa la instalación."
           message: "🔓 *Alarma desactivada*"
 
   # ── CALLBACKS (botones inline) ────────────────────────────────────────────
+
+  - id: domus_cb_sirena_on
+    alias: "DOMUS Bot - Boton encender sirena"
+    trigger:
+      - platform: event
+        event_type: telegram_callback
+        event_data:
+          data: "/sirena_on"
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.chat_id | string in ['133097449', '205920636'] }}"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.sirena
+      - service: telegram_bot.answer_callback_query
+        data:
+          callback_query_id: "{{ trigger.event.data.id }}"
+          message: "Sirena encendida"
 
   - id: domus_cb_sirena_off
     alias: "DOMUS Bot - Boton apagar sirena"

@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.36"
+#define FW_VERSION "v2.37"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -1765,7 +1765,11 @@ static const char *evt_name(uint8_t t, uint8_t v, uint8_t aux) {
         case EVT_HEAT_MODE:     return v==HM_OFF?"Calef OFF":v==HM_MANUAL?"Calef Manual":v==HM_CONSIGNA?"Calef Consigna":"Calef Programa";
         case EVT_ALARM_ARM:     return "Alarma ARMADA";
         case EVT_ALARM_DISARM:  return "Alarma Desarmada";
-        case EVT_ALARM_TRIGGER: return "INTRUSION";
+        // aux dice QUE disparo la alarma. Antes se ignoraba y todo salia como
+        // "INTRUSION", haciendo pasar por intrusiones los disparos de humo/agua.
+        case EVT_ALARM_TRIGGER:
+            return aux==EVT_FLOOD ? "ALARMA INUNDACION" :
+                   aux==EVT_SMOKE ? "ALARMA HUMO"       : "INTRUSION";
         case EVT_PRESENCE:      return "Presencia";
         case EVT_FLOOD:         return v ? "Inund. ACTIVA" : "Inund. OK";
         case EVT_SMOKE:         return v ? "Humo ACTIVO"   : "Humo OK";
@@ -2636,6 +2640,7 @@ static void check_alarms() {
         Serial.printf("[ALARM] INTRUSION (PIR estable %lums)\n",(unsigned long)(now-intr_since));
         intruder_active=true; alarm_state=AS_GRACE; alarm_ts=millis();
         memset(grace_beeps,0,sizeof(grace_beeps));
+        log_event(EVT_ALARM_TRIGGER, 1, EVT_PRESENCE);   // aux=PIR -> intrusion real
         lv_label_set_text(lbl_alarm_type,"INTRUSION");
         lv_label_set_text(lbl_alarm_detail,"Introduce PIN para desarmar");
         lv_label_set_text((lv_obj_t*)lv_obj_get_child(btn_deactivate,0),"INTRODUCIR PIN");
