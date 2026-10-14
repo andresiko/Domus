@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#define FW_VERSION "v2.37"
+#define FW_VERSION "v2.38"
 #include <Wire.h>
 #include <esp_task_wdt.h>
 #include <WiFiManager.h>
@@ -2470,7 +2470,6 @@ static void build_focus_lists(){
 
 // ── UPDATE UI ─────────────────────────────────────────────────
 static void update_home() {
-    alarm_armed=(alarm_state!=AS_OFF);
     // Track alert state; blink loop in loop() handles color for alerting bands
     harc_alert[1]=a6v3.input[1];
     harc_alert[2]=!a6v3.input[4];
@@ -2512,7 +2511,8 @@ static void update_relays_tile() {
     refresh_heat_ui();
 }
 static void update_alarm_tile() {
-    alarm_armed=(alarm_state!=AS_OFF);
+    // NO derivar alarm_armed de alarm_state: AS_SOUNDING tambien lo vale en humo
+    // e inundacion, y eso armaba la antiintrusion sola (intrusiones falsas).
     if(alarm_armed){
         lv_label_set_text(lbl_arm_state,"ARMADA");
         lv_obj_set_style_text_color(lbl_arm_state,lv_color_hex(COL_ALERT),0);
