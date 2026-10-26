@@ -13,9 +13,17 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <LittleFS.h>
-#include <mbedtls/md.h>
 #include <time.h>
 #include "config.h"
+
+// Datos privados de esta instalacion (contrasena OTA, coordenadas de casa).
+// Fichero LOCAL, fuera de git: copia include/secrets.h.example a
+// include/secrets.h y rellena los valores.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#error "Falta include/secrets.h -- copia include/secrets.h.example y rellena los valores"
+#endif
 
 // ── Display ──────────────────────────────────────────────────
 Arduino_DataBus *spi_bus = new Arduino_SWSPI(
@@ -134,21 +142,10 @@ struct {
 } wx;
 static unsigned long wx_last = 0;
 #define WX_URL "https://api.open-meteo.com/v1/forecast" \
-    "?latitude=42.8052107&longitude=-1.6286565" \
+    "?latitude=" WX_LATITUDE "&longitude=" WX_LONGITUDE \
     "&current=temperature_2m,wind_speed_10m,precipitation" \
     "&hourly=precipitation,wind_speed_10m,temperature_2m" \
     "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=2&timezone=Europe%2FMadrid"
-
-// ── Tuya API ─────────────────────────────────────────────────
-#define TUYA_CLIENT_ID     "df33cuper4k8ce7qstn8"
-#define TUYA_CLIENT_SECRET "c86757d118de4dcda2f1c143936dc7bd"
-#define TUYA_DEVICE_ID     "bf080169b9cf3e36f2khp2"
-#define TUYA_BASE_URL      "https://openapi.tuyaeu.com"
-#define TUYA_SHA256_EMPTY  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-static String        tuya_token     = "";
-static unsigned long tuya_token_exp = 0;
-static unsigned long tuya_last      = 0;
 
 // ── MQTT ─────────────────────────────────────────────────────
 #define MQTT_STATE "A6v3/30EDA03B1378/STATE"
@@ -2732,52 +2729,6 @@ static void do_switch(Screen s) {
     }
 }
 
-// ── TUYA ─────────────────────────────────────────────────────
-static String tuya_hmac(const String& key, const String& msg) {
-    uint8_t hmac[32];
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx,mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),1);
-    mbedtls_md_hmac_starts(&ctx,(const uint8_t*)key.c_str(),key.length());
-    mbedtls_md_hmac_update(&ctx,(const uint8_t*)msg.c_str(),msg.length());
-    mbedtls_md_hmac_finish(&ctx,hmac);
-    mbedtls_md_free(&ctx);
-    String out="";
-    for(int i=0;i<32;i++){ char h[3]; sprintf(h,"%02X",hmac[i]); out+=h; }
-    return out;
-}
-static String tuya_ts() {
-    char buf[20]; time_t now; time(&now);
-    snprintf(buf,sizeof(buf),"%llu",(unsigned long long)now*1000ULL);
-    return String(buf);
-}
-static String tuya_sign(const String& prefix, const String& path) {
-    String sts="GET\n" TUYA_SHA256_EMPTY "\n\n"+path;
-    return tuya_hmac(TUYA_CLIENT_SECRET, prefix+sts);
-}
-static bool tuya_get_token() {
-    String ts=tuya_ts(), nonce="";
-    String sign=tuya_sign(String(TUYA_CLIENT_ID)+ts+nonce,"/v1.0/token?grant_type=1");
-    WiFiClientSecure cl; cl.setInsecure();
-    HTTPClient http;
-    http.begin(cl,TUYA_BASE_URL "/v1.0/token?grant_type=1");
-    http.addHeader("client_id",TUYA_CLIENT_ID);
-    http.addHeader("t",ts); http.addHeader("nonce",nonce);
-    http.addHeader("sign_method","HMAC-SHA256"); http.addHeader("sign",sign);
-    http.setTimeout(15000);
-    bool ok=false;
-    int code=http.GET(); String body=http.getString();
-    if(code==200){
-        JsonDocument doc;
-        if(!deserializeJson(doc,body)&&doc["success"].as<bool>()){
-            tuya_token=doc["result"]["access_token"].as<String>();
-            int exp=doc["result"]["expire_time"].as<int>();
-            tuya_token_exp=millis()+(unsigned long)(exp-60)*1000UL;
-            ok=true; Serial.println("Tuya: token OK");
-        }
-    }
-    http.end(); return ok;
-}
 static void mqtt_publish_debug() {  // telemetria del buffer de eventos → DOMUS/debug
     char dbg[180];
     snprintf(dbg,sizeof(dbg),
@@ -2879,47 +2830,6 @@ static void mqtt_publish_status() {
     broker.publish("DOMUS/status", std::string(buf));
     time(&domus_pub_epoch);
     Serial.printf("[DOMUS/status] %s\n", buf);
-}
-
-static void fetch_tuya_temp() {
-    if(!WiFi.isConnected()) return;
-    tuya_last=millis();
-    if(tuya_token.isEmpty()||millis()>tuya_token_exp)
-        if(!tuya_get_token()) return;
-    String ts=tuya_ts(), nonce="";
-    String path="/v1.0/devices/" TUYA_DEVICE_ID "/status";
-    String sign=tuya_sign(String(TUYA_CLIENT_ID)+tuya_token+ts+nonce, path);
-    WiFiClientSecure cl; cl.setInsecure();
-    HTTPClient http;
-    http.begin(cl, TUYA_BASE_URL+path);
-    http.addHeader("client_id",TUYA_CLIENT_ID);
-    http.addHeader("access_token",tuya_token);
-    http.addHeader("t",ts); http.addHeader("nonce",nonce);
-    http.addHeader("sign_method","HMAC-SHA256"); http.addHeader("sign",sign);
-    http.setTimeout(15000);
-    if(http.GET()==200){
-        JsonDocument doc;
-        if(!deserializeJson(doc,http.getString())&&doc["success"].as<bool>()){
-            for(JsonVariant item : doc["result"].as<JsonArray>()){
-                String c=item["code"].as<String>();
-                if(c=="va_temperature"||c=="temp_current"){
-                    tuya_temp_int=item["value"].as<float>()/10.0f;
-                    char buf[12]; snprintf(buf,sizeof(buf),"%.1f\xc2\xb0""C",tuya_temp_int);
-                    if(lbl_temp_int) lv_label_set_text(lbl_temp_int,buf);
-                    Serial.printf("Tuya: %.1f C\n",tuya_temp_int);
-                }
-                if(c=="va_humidity"||c=="humidity_value"){
-                    tuya_humidity=item["value"].as<float>();
-                    if(tuya_humidity>100.0f) tuya_humidity/=10.0f;
-                    char buf[12]; snprintf(buf,sizeof(buf),"%.0f%% HR",tuya_humidity);
-                    if(lbl_humidity) lv_label_set_text(lbl_humidity,buf);
-                }
-            }
-            check_heating_auto();
-        }
-    }
-    http.end();
-    mqtt_publish_status();
 }
 
 // ── WEATHER FETCH ─────────────────────────────────────────────
@@ -3098,7 +3008,7 @@ void setup() {
         }
         // OTA por WiFi — actualizar firmware sin desmontar la pantalla
         ArduinoOTA.setHostname("domus-crowpanel");
-        ArduinoOTA.setPassword("domusota");
+        ArduinoOTA.setPassword(OTA_PASSWORD);
         ArduinoOTA.begin();
         ota_started = true;
         Serial.println("OTA listo (domus-crowpanel)");
@@ -3497,7 +3407,7 @@ void loop() {
               WiFi.reconnect();
           } else if(!ota_started){
               ArduinoOTA.setHostname("domus-crowpanel");
-              ArduinoOTA.setPassword("domusota");
+              ArduinoOTA.setPassword(OTA_PASSWORD);
               ArduinoOTA.begin();
               ota_started=true;
               if(lbl_settings_ip){

@@ -1,2 +1,14 @@
 .pio/
 .vscode/
+
+# Datos privados de esta instalacion (contrasenas, coordenadas de casa).
+# Las plantillas publicas son include/secrets.h.example y ota_secrets.ini.example
+include/secrets.h
+ota_secrets.ini
+
+# Copias de seguridad y volcados del historico del panel: no subir nunca.
+backups/
+*.bak
+
+# Notas personales.
+tareas pendientes.txt
